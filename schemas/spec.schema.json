@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string", "description": "one-paragraph statement of what gets built" },
+    "requirements": { "type": "array", "items": { "type": "string" } },
+    "assumptions": { "type": "array", "items": { "type": "string" }, "description": "unstated things this reading commits to" },
+    "failure_modes": { "type": "array", "items": { "type": "string" } },
+    "test_cases": { "type": "array", "items": { "type": "string" }, "description": "concrete input -> expected output checks" }
+  },
+  "required": ["summary", "requirements", "assumptions", "failure_modes", "test_cases"]
+}

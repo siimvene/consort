@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "task_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["done", "blocked", "partial"] },
+    "summary": { "type": "string", "description": "short: what was done, <= 3 sentences" },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "repo-relative paths this task created or changed"
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "only things a human must resolve; empty when status is done"
+    }
+  },
+  "required": ["task_id", "status", "summary", "artifacts", "blockers"]
+}

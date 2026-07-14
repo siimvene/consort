@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file": { "type": "string", "description": "repo-relative path" },
+          "line": { "type": "integer", "description": "1-indexed line the finding anchors to" },
+          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+          "title": { "type": "string", "description": "one-sentence statement of the defect" },
+          "detail": { "type": "string", "description": "concrete failure scenario: inputs/state to wrong output" }
+        },
+        "required": ["file", "line", "severity", "title", "detail"]
+      }
+    }
+  },
+  "required": ["findings"]
+}
