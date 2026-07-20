@@ -9,11 +9,11 @@
     {
       "name": "consort",
       "description": "Claude orchestrates and reviews; Codex (gpt-5.6) implements and cross-reviews. Surfaces the findings only one model caught.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./",
       "category": "productivity",
       "tags": ["cross-model", "code-review", "codex", "second-opinion"]
     }
   ],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
