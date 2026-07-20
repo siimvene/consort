@@ -29,20 +29,17 @@ if [ -z "${DIFF//[[:space:]]/}" ]; then
 fi
 
 OUT="$(mktemp)"
-trap 'rm -f "$OUT"' EXIT
+DIFF_FILE="$(mktemp)"
+trap 'rm -f "$OUT" "$DIFF_FILE"' EXIT
+printf '%s' "$DIFF" > "$DIFF_FILE"
 
-INSTRUCTIONS="You are a code reviewer. Review ONLY the unified diff provided on stdin for correctness bugs, security issues, and broken edge cases. Skip style nits. Report each concrete defect as a finding. If the diff is clean, return an empty findings array."
+INSTRUCTIONS="You are a code reviewer. Review ONLY the unified diff provided in the stdin block for correctness bugs, security issues, and broken edge cases. Skip style nits. Report each concrete defect as a finding. If the diff is clean, return an empty findings array."
 
-# stdin (the diff) is appended to the prompt as a <stdin> block by codex exec.
 # read-only sandbox: Codex may read the repo but cannot modify anything.
-# --output-schema forces the final message to match findings.schema.json.
-printf '%s' "$DIFF" | codex exec \
-  -m "$MODEL" \
-  -s read-only \
-  --skip-git-repo-check \
-  --output-schema "$SCHEMA" \
-  -o "$OUT" \
-  "$INSTRUCTIONS" >/dev/null 2>&1 || true
+# The diff travels as the <stdin> block; the schema is enforced by the backend
+# (--output-schema on exec, prompt contract + extraction on the plugin runtime).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex-backend.sh"
+consort_codex_call read-only "$SCHEMA" "$PWD" "$INSTRUCTIONS" "$OUT" "$DIFF_FILE" || true
 
 if [ -s "$OUT" ]; then
   cat "$OUT"

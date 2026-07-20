@@ -88,6 +88,24 @@ Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-dem
 | `schemas/` | One shared shape per artifact type (`spec`, `findings`, `task-result`) is what makes two vendors comparable and machine-mergeable |
 | `.consort/` | The state bus: every phase resumes from disk; the session dying loses nothing |
 
+## Codex backends
+
+The scripts reach Codex through one of two backends, resolved by
+`scripts/codex-backend.sh`:
+
+- **plugin** — the official Codex Claude Code plugin's companion runtime
+  (`codex-companion.mjs task`), auto-detected under
+  `~/.claude/plugins/cache/*/codex/*`. Uses the plugin's shared runtime and
+  session plumbing; consult/review run read-only, delegation runs
+  workspace-write (`--write`). The output schema travels as a prompt contract
+  and is extracted/validated locally (the runtime has no `--output-schema`).
+- **exec** — the raw `codex exec` CLI (the original bridge), with native
+  `--output-schema` enforcement.
+
+Auto-resolution prefers the plugin when installed; force either with
+`CONSORT_CODEX_BACKEND=plugin|exec`. Delegation entries in `.consort/log.jsonl`
+record which backend served each task.
+
 ## The rules that keep it honest
 
 1. **Whichever model authors, the other verifies.** A finding is a lead, not a verdict: it gets checked against reality before it's reported.

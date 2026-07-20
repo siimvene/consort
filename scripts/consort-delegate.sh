@@ -39,14 +39,9 @@ RESULT="$CONSORT/tasks/$TASK_ID.result.json"
 SYS="You are sol, the implementer in the consort harness. Execute the task in the brief on stdin. Iterate until its definition of done is observed, or stop only at a blocker a human must resolve. Do not hand unfinished checks back to the orchestrator. Keep verbose output in files; your returned summary must be short. Set task_id to '$TASK_ID'. Return only a task-result object matching the provided schema."
 
 # workspace-write: sol may create/modify files within WORKDIR but not outside it.
-printf '%s' "$(cat "$BRIEF_FILE")" | codex exec \
-  -m "$MODEL" \
-  -s workspace-write \
-  -C "$WORKDIR" \
-  --skip-git-repo-check \
-  --output-schema "$SCHEMA" \
-  -o "$RESULT" \
-  "$SYS" >/dev/null 2>&1 || true
+. "$ROOT/scripts/codex-backend.sh"
+BACKEND="$(consort_codex_backend)"
+consort_codex_call workspace-write "$SCHEMA" "$WORKDIR" "$SYS" "$RESULT" "$CONSORT/tasks/$TASK_ID.brief.md" || true
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [ ! -s "$RESULT" ]; then
@@ -54,7 +49,7 @@ if [ ! -s "$RESULT" ]; then
   printf '{"task_id":"%s","status":"blocked","summary":"no structured result from sol","artifacts":[],"blockers":["codex returned no schema-conforming output"]}\n' "$TASK_ID" > "$RESULT"
 fi
 
-printf '{"ts":"%s","event":"delegate","task_id":"%s","model":"%s","result":"%s"}\n' \
-  "$TS" "$TASK_ID" "$MODEL" ".consort/tasks/$TASK_ID.result.json" >> "$CONSORT/log.jsonl"
+printf '{"ts":"%s","event":"delegate","task_id":"%s","model":"%s","backend":"%s","result":"%s"}\n' \
+  "$TS" "$TASK_ID" "$MODEL" "$BACKEND" ".consort/tasks/$TASK_ID.result.json" >> "$CONSORT/log.jsonl"
 
 cat "$RESULT"

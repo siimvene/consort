@@ -6,13 +6,14 @@
 # Emits the schema-conforming JSON on stdout ({} on failure).
 #
 # Env: CONSORT_IMPL_MODEL (default gpt-5.6-sol)
+#      CONSORT_CODEX_BACKEND (exec|plugin; default auto — see codex-backend.sh)
 set -euo pipefail
-MODEL="${CONSORT_IMPL_MODEL:-gpt-5.6-sol}"
 SCHEMA="${1:?schema file required}"
 PROMPT="${2:?prompt required}"
 WORKDIR="${3:-$PWD}"
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex-backend.sh"
+
 OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT
-codex exec -m "$MODEL" -s read-only -C "$WORKDIR" --skip-git-repo-check \
-  --output-schema "$SCHEMA" -o "$OUT" "$PROMPT" >/dev/null 2>&1 || true
+consort_codex_call read-only "$SCHEMA" "$WORKDIR" "$PROMPT" "$OUT" || true
 if [ -s "$OUT" ]; then cat "$OUT"; else echo '{}'; fi
