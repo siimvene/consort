@@ -20,17 +20,34 @@ Set `CONSORT_IMPL_MODEL` to override the implementer model (default `gpt-5.6-sol
 ## Run the phases in order. Write each artifact before advancing.
 
 ### 1. Interview → `.consort/interview.md`
-Read `REQUEST.md`. List what's unambiguous and what's genuinely unclear. Get sol's
-divergent questions (the ones you didn't ask):
-`consort-consult.sh schemas/spec.schema.json "<REQUEST + 'list the questions and edge cases this request leaves open'>"`.
-Fold in any real gaps. **Gate: if ambiguity is high, ask the human; else record assumptions and continue.**
+Read `REQUEST.md`. As principal, list what's unambiguous and what's genuinely unclear
+(this is groundwork, not a panel draft). Then get **each vendor's divergent questions**
+independently and in parallel — the ones a fresh reader would ask that you didn't:
+- **sol (OpenAI):** `consort-consult.sh schemas/spec.schema.json "<REQUEST + 'list the questions and edge cases this request leaves open'>"`.
+- **A fresh Anthropic-vendor agent** (non-inheriting subagent, per phase 2) with the same brief.
+
+Fold in the real gaps both surface. **Gate: if ambiguity is high, ask the human; else record assumptions and continue.**
 
 ### 2. Spec (panel) → `.consort/spec.md`
-Draft your own spec (schemas/spec.schema.json shape). In parallel get sol's independent
-draft: `consort-consult.sh schemas/spec.schema.json "<REQUEST + 'write a spec'>"`. You
-now hold ≥2 blind drafts. **Score** each on coverage, assumptions surfaced, failure modes,
-testability. **Synthesize** one spec from the best, grafting the unique good ideas from the
-others, and record which idea came from which voice. **Gate: human approves the spec.**
+**Do not author a panel draft yourself.** As principal you investigate (groundwork),
+score, and synthesize — but the drafts must come from independent agents so the panel
+is genuinely blind. Get **two independent blind drafts in parallel**:
+- **sol (OpenAI):** `consort-consult.sh schemas/spec.schema.json "<REQUEST + 'write a spec'>"`.
+- **A fresh implementer-tier agent for your own vendor (Anthropic):** spawn it with the
+  same brief in a **non-inheriting** context (Claude Code: the Task/Agent tool with a
+  non-`fork` subagent_type — `fork` inherits your context and defeats independence).
+  Have it write its draft to `.consort/spec-<vendor>.json` and return only a short pointer.
+
+You now hold ≥2 blind drafts, neither anchored to your orchestration context. **Score**
+each on coverage, assumptions surfaced, failure modes, testability. **Synthesize** one spec
+from the best, grafting the unique good ideas from the others, and record which idea came
+from which voice. **Gate: human approves the spec.**
+
+> Why not draft it yourself: the principal already holds the REQUEST framing and all prior
+> context, so a principal-authored draft is not blind to that framing — it converges with
+> the synthesis instead of diverging from it. An independent spawned agent per vendor is the
+> only way both voices are truly independent. (Falls back to a principal-inline draft only
+> if the principal's runtime cannot spawn subagents.)
 
 ### 3. Plan → `.consort/plan.md`, `.consort/tasks.json`
 Decompose the spec into a short ordered task list (each task: id, goal, definition of done).

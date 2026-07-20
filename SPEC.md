@@ -40,8 +40,8 @@ Each phase has: inputs, actors, mode, an artifact it writes, and a gate to advan
 
 | # | Phase | Actors / mode | Artifact written | Advance gate |
 |---|---|---|---|---|
-| 1 | **Interview** | Fable drives Socratic Q; sol proposes the questions Fable didn't ask | `.consort/interview.md` | ambiguity below threshold; human confirms scope |
-| 2 | **Spec** | Panel: Fable + sol each draft a spec independently → Fable scores + synthesizes | `.consort/spec.md` | human approves the synthesized spec |
+| 1 | **Interview** | Principal frames; a spawned agent per vendor proposes the questions the principal didn't ask | `.consort/interview.md` | ambiguity below threshold; human confirms scope |
+| 2 | **Spec** | Panel: an independent spawned agent per vendor drafts a spec; the principal scores + synthesizes (does not draft) | `.consort/spec.md` | human approves the synthesized spec |
 | 3 | **Plan** | Fable decomposes into tasks; sol refutes the plan (`consort:plan`) | `.consort/plan.md`, `.consort/tasks.json` | plan survives refutation |
 | 4 | **Implement** | Per task: Fable delegates to sol (`codex exec`); Fable never writes bulk code | code on a branch + `.consort/scoreboard.md` | task DoD (its tests) pass |
 | 5 | **Review** | Fable + sol review the diff independently → merge (`consort:review`) | `.consort/review.md` | no unresolved critical/high finding |
@@ -52,14 +52,20 @@ final branch. Everything between runs unattended.
 
 ## 5. Panel + synthesis mechanism (phases 1–2)
 
-The point of the panel is divergence, so independence is the rule:
+The point of the panel is divergence, so independence is the rule. **The principal does
+not author a panel draft** — it holds the REQUEST framing and all prior context, so a
+principal-written draft is not blind to that framing and converges with the synthesis
+instead of diverging from it. Both drafts come from independent spawned agents:
 
-1. Both voices draft **blind**: sol via `codex exec` (read-only, schema-forced), and
-   Fable's own draft written before it sees sol's.
-2. Fable scores both drafts against fixed criteria: coverage of the request, unstated
+1. Both voices draft **blind**: sol via `codex exec` (read-only, schema-forced), and the
+   principal's own vendor (Anthropic) via a **freshly spawned, non-inheriting agent** (the
+   Task/Agent tool with a non-`fork` subagent_type) given the same brief. Neither draft is
+   anchored to the principal's context. (Falls back to a principal-inline draft only where
+   the principal's runtime cannot spawn subagents.)
+2. The principal scores both drafts against fixed criteria: coverage of the request, unstated
    assumptions surfaced, failure modes named, and testability.
-3. Fable synthesizes a single artifact from the stronger draft, **grafting** the unique
-   good ideas from the other (not averaging — a merge that keeps the best of each).
+3. The principal synthesizes a single artifact from the stronger draft, **grafting** the
+   unique good ideas from the other (not averaging — a merge that keeps the best of each).
 4. The synthesis records, in the artifact, which ideas came from which voice (audit
    trail + the seed of routing telemetry).
 
