@@ -5,6 +5,17 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.3.0] — 2026-07-22
+
+### Added
+- **Pack-aware review: `CONSORT_RULE_PACKS`.** Colon-separated files/dirs of
+  `.md`/`.mdc` rule packs are injected into the Codex reviewer prompt by
+  `consort-review.sh`, and the review skill instructs the principal to read
+  the same packs for its own pass — one written standard, two independent
+  readings. Packs stay in the consuming org's standards repo; consort carries
+  the mechanism, never the rubric. 64KB cap with a loud stderr warning on
+  truncation.
+
 ## [0.2.0] — 2026-07-20
 
 ### Changed

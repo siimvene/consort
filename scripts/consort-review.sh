@@ -10,6 +10,9 @@
 #
 # Env:
 #   CONSORT_IMPL_MODEL   codex model (default: gpt-5.6-sol)
+#   CONSORT_RULE_PACKS   colon-separated files/dirs of .md/.mdc rule packs; injected
+#                        into the reviewer prompt so both sides review against the
+#                        same written standard (packs stay in the org's repo, not here)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,6 +37,33 @@ trap 'rm -f "$OUT" "$DIFF_FILE"' EXIT
 printf '%s' "$DIFF" > "$DIFF_FILE"
 
 INSTRUCTIONS="You are a code reviewer. Review ONLY the unified diff provided in the stdin block for correctness bugs, security issues, and broken edge cases. Skip style nits. Report each concrete defect as a finding. If the diff is clean, return an empty findings array."
+
+# Shared rubric: inject rule packs so this reviewer and the principal review
+# against the same written standard. 64KB cap keeps a fat pack set from eating
+# the reviewer's context; the cut is loud, not silent.
+PACKS=""
+if [ -n "${CONSORT_RULE_PACKS:-}" ]; then
+  IFS=':' read -ra PACK_PATHS <<< "$CONSORT_RULE_PACKS"
+  for p in "${PACK_PATHS[@]}"; do
+    [ -z "$p" ] && continue
+    if [ -d "$p" ]; then
+      while IFS= read -r f; do
+        PACKS+="$(printf '\n\n=== rule pack: %s ===\n' "$f")$(cat "$f")"
+      done < <(find "$p" -maxdepth 2 -type f \( -name '*.md' -o -name '*.mdc' \) | sort)
+    elif [ -f "$p" ]; then
+      PACKS+="$(printf '\n\n=== rule pack: %s ===\n' "$p")$(cat "$p")"
+    else
+      echo "consort-review: rule pack path not found: $p" >&2
+    fi
+  done
+fi
+if [ -n "$PACKS" ]; then
+  if [ "${#PACKS}" -gt 65536 ]; then
+    echo "consort-review: rule packs exceed 64KB, truncating — trim CONSORT_RULE_PACKS" >&2
+    PACKS="${PACKS:0:65536}"$'\n[rule packs truncated at 64KB]'
+  fi
+  INSTRUCTIONS+=" Additionally review the diff against the following rule packs; when a finding violates a pack rule, name that rule in the finding title.${PACKS}"
+fi
 
 # read-only sandbox: Codex may read the repo but cannot modify anything.
 # The diff travels as the <stdin> block; the schema is enforced by the backend

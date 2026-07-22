@@ -1,6 +1,6 @@
 {
   "name": "consort",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Cross-model second opinion. Claude orchestrates and reviews; Codex (gpt-5.6) implements and cross-reviews. Surfaces the findings only one model caught.",
   "author": {
     "name": "Siim Vene"

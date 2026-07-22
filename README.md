@@ -75,6 +75,11 @@ implementer: `codex exec -m gpt-5.6-sol "reply OK"` (override the model with
 /consort:plan <task>      # cross-vendor plan refutation before code is written
 ```
 
+Optional: point `CONSORT_RULE_PACKS` at your org's rule packs (colon-separated
+files or dirs of `.md`/`.mdc`) and both reviewers — Codex via the script, the
+principal via the skill — review against the same written standard. The packs
+live in your standards repo; consort ships the mechanism, not the rubric.
+
 Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-demo`
 
 ## Mechanics — what actually executes
