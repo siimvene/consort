@@ -76,9 +76,11 @@ implementer: `codex exec -m gpt-5.6-sol "reply OK"` (override the model with
 ```
 
 Optional: point `CONSORT_RULE_PACKS` at your org's rule packs (colon-separated
-files or dirs of `.md`/`.mdc`) and both reviewers — Codex via the script, the
-principal via the skill — review against the same written standard. The packs
-live in your standards repo; consort ships the mechanism, not the rubric.
+files or dirs of `.md`/`.mdc`) — or vendor packs into the repo at
+`.claude/rules/`, which is picked up automatically when the variable is unset.
+Both reviewers — Codex via the script, the principal via the skill — review
+against the same written standard. The packs live in your standards repo;
+consort ships the mechanism, not the rubric.
 
 Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-demo`
 

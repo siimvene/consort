@@ -39,11 +39,13 @@ codex exec review --uncommitted
 
 ## Rule packs (shared rubric)
 
-If `CONSORT_RULE_PACKS` is set (colon-separated files or directories of `.md`/`.mdc`
-rule packs), BOTH reviewers use it: `consort-review.sh` injects the packs into
-Codex's prompt automatically, and you must read the same files and apply them to
-your own findings pass. One written standard, two independent readings. Pack
-content lives in the org's standards repo — never inside this plugin.
+Pack resolution, in order: `CONSORT_RULE_PACKS` (colon-separated files or
+directories of `.md`/`.mdc` rule packs) if set; otherwise a repo-local
+`.claude/rules/` directory if present. BOTH reviewers use the same packs:
+`consort-review.sh` injects them into Codex's prompt automatically, and you
+must read the same files and apply them to your own findings pass. One written
+standard, two independent readings. Pack content lives in the org's standards
+repo — never inside this plugin.
 
 ## Review loop (`/consort:review`)
 

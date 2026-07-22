@@ -5,6 +5,13 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.3.1] — 2026-07-22
+
+### Added
+- **Default pack resolution.** When `CONSORT_RULE_PACKS` is unset, a repo-local
+  `.claude/rules/` directory is used automatically — zero-config reviews in
+  repos that vendor their rule packs.
+
 ## [0.3.0] — 2026-07-22
 
 ### Added

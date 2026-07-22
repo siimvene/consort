@@ -41,6 +41,11 @@ INSTRUCTIONS="You are a code reviewer. Review ONLY the unified diff provided in 
 # Shared rubric: inject rule packs so this reviewer and the principal review
 # against the same written standard. 64KB cap keeps a fat pack set from eating
 # the reviewer's context; the cut is loud, not silent.
+# Default resolution: when CONSORT_RULE_PACKS is unset, a repo-local
+# .claude/rules/ directory (vendored packs) is used automatically.
+if [ -z "${CONSORT_RULE_PACKS:-}" ] && [ -d "$PWD/.claude/rules" ]; then
+  CONSORT_RULE_PACKS="$PWD/.claude/rules"
+fi
 PACKS=""
 if [ -n "${CONSORT_RULE_PACKS:-}" ]; then
   IFS=':' read -ra PACK_PATHS <<< "$CONSORT_RULE_PACKS"
