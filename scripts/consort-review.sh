@@ -26,7 +26,9 @@ else
   DIFF="$(git diff HEAD)"
 fi
 
-if [ -z "${DIFF//[[:space:]]/}" ]; then
+# Whitespace-only check must stay linear: ${DIFF//[[:space:]]/} is quadratic
+# in macOS's system bash 3.2 and spins for CPU-hours on a multi-KB diff.
+if ! printf '%s' "$DIFF" | grep -q '[^[:space:]]'; then
   echo '{"findings":[]}'
   exit 0
 fi
