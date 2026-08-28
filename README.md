@@ -58,6 +58,19 @@ Each phase writes its artifact before advancing; any phase resumes from disk.
 
 🚧 = human gate (scope and spec). Everything between runs unattended.
 
+## Dependencies
+
+Consort does not work standalone. Before installing, you need:
+
+1. **Codex CLI** — `codex` on PATH, authenticated. Sanity check:
+   `codex exec -m gpt-5.6-sol "reply OK"` (override the model with
+   `CONSORT_IMPL_MODEL`).
+2. **Codex plugin for Claude Code** (recommended) — `codex@openai-codex` (from
+   [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)). Consort's
+   default backend is this plugin's companion runtime (see "Codex backends" below);
+   without it consort falls back to raw `codex exec`, which loses session reuse.
+3. **Claude Code**, plus `node` and `git` on PATH.
+
 ## Install & use
 
 ```
@@ -65,22 +78,20 @@ Each phase writes its artifact before advancing; any phase resumes from disk.
 /plugin install consort@consort
 ```
 
-Requires the `claude` and `codex` CLIs on PATH, `node`, and `git`. Sanity-check the
-implementer: `codex exec -m gpt-5.6-sol "reply OK"` (override the model with
-`CONSORT_IMPL_MODEL`).
-
 ```
 /consort:run [workdir]    # the whole lifecycle on a repo containing REQUEST.md
 /consort:review [base]    # cross-model review of the working diff
 /consort:plan <task>      # cross-vendor plan refutation before code is written
 ```
 
-Optional: point `CONSORT_RULE_PACKS` at your org's rule packs (colon-separated
+**Rule packs:** point `CONSORT_RULE_PACKS` at your org's rule packs (colon-separated
 files or dirs of `.md`/`.mdc`) — or vendor packs into the repo at
 `.claude/rules/`, which is picked up automatically when the variable is unset.
 Both reviewers — Codex via the script, the principal via the skill — review
-against the same written standard. The packs live in your standards repo;
-consort ships the mechanism, not the rubric.
+against the same written standard. Org coding standards live in your standards
+repo; the plugin itself ships only vendor-neutral review methodology in its
+`rules/` directory (`blast-surface.md` and `finding-discipline.md`, always
+injected since 0.4.0, no setup needed).
 
 Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-demo`
 

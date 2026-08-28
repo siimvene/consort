@@ -38,7 +38,7 @@ DIFF_FILE="$(mktemp)"
 trap 'rm -f "$OUT" "$DIFF_FILE"' EXIT
 printf '%s' "$DIFF" > "$DIFF_FILE"
 
-INSTRUCTIONS="You are a code reviewer. Review ONLY the unified diff provided in the stdin block for correctness bugs, security issues, and broken edge cases. Skip style nits. Report each concrete defect as a finding. If the diff is clean, return an empty findings array."
+INSTRUCTIONS="You are a code reviewer. Review the unified diff provided in the stdin block for correctness bugs, security issues, and broken edge cases. Apply any rule packs injected below; where a pack directs checks beyond the diff itself (e.g. repo-wide consumer sweeps) and you have repository access, perform them — findings from those checks count like any other. Skip style nits. Report each concrete defect as a finding. If the diff is clean, return an empty findings array."
 
 # Shared rubric: inject rule packs so this reviewer and the principal review
 # against the same written standard. 64KB cap keeps a fat pack set from eating
@@ -47,6 +47,13 @@ INSTRUCTIONS="You are a code reviewer. Review ONLY the unified diff provided in 
 # .claude/rules/ directory (vendored packs) is used automatically.
 if [ -z "${CONSORT_RULE_PACKS:-}" ] && [ -d "$PWD/.claude/rules" ]; then
   CONSORT_RULE_PACKS="$PWD/.claude/rules"
+fi
+# Built-in methodology packs ship with the plugin and are ALWAYS injected,
+# ahead of any org/repo packs. Org coding standards still live in the org's
+# repo; this dir holds only vendor-neutral review methodology (how to review),
+# not house rules (what code must look like).
+if [ -d "$ROOT/rules" ]; then
+  CONSORT_RULE_PACKS="$ROOT/rules${CONSORT_RULE_PACKS:+:$CONSORT_RULE_PACKS}"
 fi
 PACKS=""
 if [ -n "${CONSORT_RULE_PACKS:-}" ]; then

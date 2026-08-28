@@ -1,6 +1,7 @@
 ---
 name: review
 description: Cross-model orchestration between Claude Code and a local Codex CLI. Claude orchestrates, plans, and reviews; Codex implements and provides an independent second opinion. Use when you want two different model families to cross-check work rather than one model reviewing itself.
+version: 0.4.0
 ---
 
 # review — cross-model review (Claude + Codex)
@@ -39,26 +40,46 @@ codex exec review --uncommitted
 
 ## Rule packs (shared rubric)
 
-Pack resolution, in order: `CONSORT_RULE_PACKS` (colon-separated files or
-directories of `.md`/`.mdc` rule packs) if set; otherwise a repo-local
+Pack resolution, in order: built-in methodology packs from this plugin's
+`rules/` directory (always active); then `CONSORT_RULE_PACKS` (colon-separated
+files or directories of `.md`/`.mdc` rule packs) if set; otherwise a repo-local
 `.claude/rules/` directory if present. BOTH reviewers use the same packs:
 `consort-review.sh` injects them into Codex's prompt automatically, and you
 must read the same files and apply them to your own findings pass. One written
-standard, two independent readings. Pack content lives in the org's standards
-repo — never inside this plugin.
+standard, two independent readings.
+
+Org coding standards (what code must look like) live in the org's standards
+repo, never inside this plugin. The plugin's own `rules/` directory holds only
+vendor-neutral review methodology (how to review): `rules/blast-surface.md`,
+the consumer-sweep discipline that catches regressions living outside the
+diff, and `rules/finding-discipline.md`, which governs how findings are
+stated, graded, answered across rounds, and re-checked after fixes.
 
 ## Review loop (`/consort:review`)
 
-1. If `CONSORT_RULE_PACKS` is set, read every pack it names first.
-2. Produce your own findings on the target diff, in `schemas/findings.schema.json`
-   shape (`file, line, severity, title, detail`), applying the packs where set.
+1. Read the built-in packs in `"$CLAUDE_PLUGIN_ROOT"/rules/`; then, if
+   `CONSORT_RULE_PACKS` is set, every pack it names — otherwise a repo-local
+   `.claude/rules/` directory if present (the script resolves packs the same
+   way, so both reviewers read the same set).
+2. Run the blast-surface sweep (`rules/blast-surface.md`) on the target diff:
+   inventory what changed lifecycle, grep its consumers, hunt removed implicit
+   behavior, check runtime contracts. Findings from the sweep are findings like
+   any other. Do not skip it for small diffs.
+3. Run the project's own test suite and compare against a pre-change baseline
+   on the same machine; any new failure is a finding. If the suite cannot run,
+   say so explicitly in the review output instead of silently omitting it.
+4. Produce your own findings on the target diff, in `schemas/findings.schema.json`
+   shape (`file, line, severity, title, detail`), applying the packs.
    Write to a temp JSON file.
-3. Get Codex's findings: `consort-review.sh` returns the same schema (packs are
+5. Get Codex's findings: `consort-review.sh` returns the same schema (packs are
    injected into its prompt by the script).
-4. Merge: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json codex.json`.
-5. Present in this order: **Both agree** (act first), **Codex only** (what you missed,
+6. Merge: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json codex.json`.
+7. Present in this order: **Both agree** (act first), **Codex only** (what you missed,
    the real payoff), **Claude only** (Codex missed). Verify each cross-model finding
    before treating it as real; a second model's finding is a lead, not a verdict.
+8. Grade, answer, and (when fixes touch guards, teardown, or concurrency paths)
+   re-check per `rules/finding-discipline.md`: the fix pass is part of the
+   review, not a new review.
 
 ## Plan loop (`/consort:plan`)
 

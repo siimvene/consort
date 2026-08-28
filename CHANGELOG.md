@@ -5,6 +5,42 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.4.0] — 2026-08-19
+
+### Added
+- Blast-surface steps 6-8: peer-concurrency sweep, destructive-action gate
+  (identity, scope, bound, symmetry), fix-introduced-invariant propagation.
+  Distilled from the bot-review rounds on
+  [openai/codex-plugin-cc#660](https://github.com/openai/codex-plugin-cc/pull/660): the four
+  lenses behind its P1s that the pack did not encode.
+- Second built-in pack `rules/finding-discipline.md`: findings name their
+  trigger, severity carries the consequence (MINOR/P2 may be acknowledged with
+  rationale), rounds converge instead of enduring, and guard/teardown-touching
+  fixes get one scoped fix pass (blast-surface 7-8 over the fix diff) before
+  done. Same source: the round behaviors that made the upstream bot effective.
+- **Built-in methodology packs.** The plugin now ships a `rules/` directory that
+  `consort-review.sh` always injects ahead of org/repo packs, and the review
+  skill instructs the Claude-side reviewer to apply the same files. First pack:
+  `rules/blast-surface.md`, a mandatory consumer-sweep discipline (inventory
+  changed lifecycles, grep their consumers repo-wide, hunt removed implicit
+  behavior, check runtime contracts, run the test suite against a baseline).
+  Motivated by a 4-round upstream review cycle on a broker-lifecycle fix where
+  every escaped finding lived outside the diff, in consumers neither reviewer
+  had enumerated.
+- **Review loop: test-suite step.** Ad-hoc `/consort:review` now runs the
+  project's own test suite and compares against a pre-change baseline; the full
+  `/consort` lifecycle already ran the suite via `consort-gate.sh` (current
+  tree only, no baseline), ad-hoc reviews silently skipped it entirely.
+
+### Changed
+- Pack-resolution docs distinguish org coding standards (stay in the org repo)
+  from vendor-neutral review methodology (ships with the plugin).
+
+### Fixed
+- Whitespace-only diff check is linear again: `${DIFF//[[:space:]]/}` is
+  quadratic in macOS's system bash 3.2 and spins for CPU-hours on a multi-KB
+  diff; replaced with a `grep -q '[^[:space:]]'` probe.
+
 ## [0.3.1] — 2026-07-22
 
 ### Added

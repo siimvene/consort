@@ -1,7 +1,8 @@
 {
   "name": "consort",
-  "version": "0.3.1",
-  "description": "Cross-model second opinion. Claude orchestrates and reviews; Codex (gpt-5.6) implements and cross-reviews. Surfaces the findings only one model caught.",
+  "displayName": "Consort",
+  "version": "0.4.0",
+  "description": "A second pair of eyes from a different AI. Claude and OpenAI's Codex review each other's work and surface the problems only one of them spotted.",
   "author": {
     "name": "Siim Vene"
   },
