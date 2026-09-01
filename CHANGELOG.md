@@ -5,6 +5,31 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.5.0] — 2026-09-01
+
+### Added
+- **Scanner tier: `scripts/consort-scan.sh` + `scripts/scan-to-findings.mjs`.**
+  A model-free third voice for reviews: runs Trivy (dependency CVEs, leaked
+  secrets, IaC misconfigurations) when on PATH, and SonarQube when a server is
+  reachable (`SONAR_HOST_URL`/`SONAR_TOKEN` + repo `sonar-project.properties`,
+  including the analysis CE-task poll and issue/hotspot fetch), converting
+  native scanner output into the shared `findings.schema.json` shape. Every
+  skipped or failed scanner is reported on stderr — a scan that ran nothing
+  says so instead of passing as clean. Secret findings never echo the matched
+  material. Motivation: rule-based scanners and cross-model panels catch
+  near-disjoint defect sets, so the tiers compose rather than compete.
+- Third built-in pack `rules/security-review.md`: pairs the scanner tier with
+  the model-tier security checks a pattern-matcher cannot do (authorization
+  scoping, injection at construction sites, trust-boundary shifts, secrets in
+  motion, dangerous sinks, supply chain). Scanner findings are deterministic
+  evidence; the model owes each one a reachability verdict. Findings outside
+  the diff are pre-existing debt except live credentials and criticals in
+  newly added dependencies, which always gate.
+- New command `/consort:scan` — run the scanner tier standalone and triage.
+- Review loop (skill + lifecycle phase 5) gained a scanner step; merged
+  reviews now present a fourth column, **Scanners**, after the cross-model
+  three.
+
 ## [0.4.0] — 2026-08-19
 
 ### Added

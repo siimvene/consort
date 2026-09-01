@@ -1,7 +1,7 @@
 ---
 name: consort
 description: Drive a full multi-vendor development lifecycle — interview, spec, plan, implement, review, gate — as the orchestrating principal, delegating implementation to a cross-vendor implementer (Codex by default) and cross-reviewing with consort. Use to take a feature request from idea to a reviewed, gated branch in one orchestrated run.
-version: 0.4.0
+version: 0.5.0
 ---
 
 # consort — run the whole lifecycle
@@ -65,10 +65,16 @@ Read the built-in methodology packs in `"$CLAUDE_PLUGIN_ROOT"/rules/`, plus
 `CONSORT_RULE_PACKS` if set or a repo-local `.claude/rules/` directory if
 present (the script injects the same packs into sol) and apply them to your
 own pass; run
-the blast-surface sweep on the diff. Produce your own findings
+the blast-surface sweep on the diff and the scanner tier
+(`consort-scan.sh <workdir> > .consort/scan.json`, per
+`rules/security-review.md`). Produce your own findings
 (schemas/findings.schema.json). Get sol's: `consort-review.sh` (alias for
 consort-review.sh on the workdir). Merge:
-`merge-findings.mjs <your.json> <sol.json>`. Resolve every critical/high before advancing.
+`merge-findings.mjs <your.json> <sol.json>`, then append the triaged scanner
+findings from `.consort/scan.json` to `review.md` as a **Scanners** section.
+Resolve every critical/high before advancing — scanner findings included; a
+reachable scanner critical (live credential, critical CVE in a dependency this
+change adds) gates exactly like a model finding.
 
 ### 6. Gate (no model) → exit code
 `consort-gate.sh <workdir>`. Structural checks + tests. Must exit 0.

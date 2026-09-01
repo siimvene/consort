@@ -82,6 +82,7 @@ Consort does not work standalone. Before installing, you need:
 /consort:run [workdir]    # the whole lifecycle on a repo containing REQUEST.md
 /consort:review [base]    # cross-model review of the working diff
 /consort:plan <task>      # cross-vendor plan refutation before code is written
+/consort:scan [workdir]   # model-free security scan (Trivy/Sonar), triaged
 ```
 
 **Rule packs:** point `CONSORT_RULE_PACKS` at your org's rule packs (colon-separated
@@ -90,8 +91,18 @@ files or dirs of `.md`/`.mdc`) — or vendor packs into the repo at
 Both reviewers — Codex via the script, the principal via the skill — review
 against the same written standard. Org coding standards live in your standards
 repo; the plugin itself ships only vendor-neutral review methodology in its
-`rules/` directory (`blast-surface.md` and `finding-discipline.md`, always
-injected since 0.4.0, no setup needed).
+`rules/` directory (`blast-surface.md`, `finding-discipline.md`, and
+`security-review.md`, always injected since 0.4.0, no setup needed).
+
+**Security scanners (optional):** when [Trivy](https://trivy.dev) is on PATH,
+`consort-scan.sh` adds a deterministic third voice to every review — dependency
+CVEs, leaked secrets, IaC misconfigurations — emitted in the same findings
+schema the models use. A [SonarQube](https://www.sonarsource.com) leg joins it
+when a server is reachable (`SONAR_HOST_URL`, default `http://localhost:9000`),
+`SONAR_TOKEN` is set, and the repo has a `sonar-project.properties`. Neither is
+required; every skipped scanner is reported loudly, never silently. Rule-based
+scanners and model reviewers catch nearly disjoint defect sets — that
+zero-overlap is why both tiers run.
 
 Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-demo`
 
@@ -102,6 +113,7 @@ Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-dem
 | `scripts/consort-delegate.sh` | Hands the implementer one task as a five-part brief (goal, paths, constraints, definition of done, return format); result is schema-forced JSON, logged to `.consort/tasks/` |
 | `scripts/consort-consult.sh` | Read-only implementer with a schema: panel drafts, plan refutations, divergent questions |
 | `scripts/consort-review.sh` + `merge-findings.mjs` | The duet: both voices review the same diff blind; the merge surfaces what only one model caught |
+| `scripts/consort-scan.sh` + `scan-to-findings.mjs` | Model-free scanner tier: Trivy (vulns, secrets, misconfig) and SonarQube (when a server is configured), converted into the shared findings schema |
 | `scripts/consort-gate.sh` | Model-free verdict — code: tests green; documents: sources untouched, claims traced |
 | `schemas/` | One shared shape per artifact type (`spec`, `findings`, `task-result`) is what makes two vendors comparable and machine-mergeable |
 | `.consort/` | The state bus: every phase resumes from disk; the session dying loses nothing |

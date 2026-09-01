@@ -1,7 +1,7 @@
 ---
 name: review
 description: Cross-model orchestration between Claude Code and a local Codex CLI. Claude orchestrates, plans, and reviews; Codex implements and provides an independent second opinion. Use when you want two different model families to cross-check work rather than one model reviewing itself.
-version: 0.4.0
+version: 0.5.0
 ---
 
 # review — cross-model review (Claude + Codex)
@@ -52,8 +52,10 @@ Org coding standards (what code must look like) live in the org's standards
 repo, never inside this plugin. The plugin's own `rules/` directory holds only
 vendor-neutral review methodology (how to review): `rules/blast-surface.md`,
 the consumer-sweep discipline that catches regressions living outside the
-diff, and `rules/finding-discipline.md`, which governs how findings are
-stated, graded, answered across rounds, and re-checked after fixes.
+diff; `rules/finding-discipline.md`, which governs how findings are
+stated, graded, answered across rounds, and re-checked after fixes; and
+`rules/security-review.md`, which pairs the deterministic scanner tier
+(`consort-scan.sh`) with the model-tier security checks scanners cannot do.
 
 ## Review loop (`/consort:review`)
 
@@ -65,19 +67,27 @@ stated, graded, answered across rounds, and re-checked after fixes.
    inventory what changed lifecycle, grep its consumers, hunt removed implicit
    behavior, check runtime contracts. Findings from the sweep are findings like
    any other. Do not skip it for small diffs.
-3. Run the project's own test suite and compare against a pre-change baseline
+3. Run the scanner tier: `bash "$CLAUDE_PLUGIN_ROOT"/scripts/consort-scan.sh`
+   (Trivy, plus SonarQube when a server is configured — see
+   `rules/security-review.md`). Capture its stdout findings and repeat every
+   SKIPPED line from stderr in the review output; triage each scanner finding
+   for reachability per the pack. Only the principal runs this — a read-only
+   cross-reviewer states it could not scan and defers.
+4. Run the project's own test suite and compare against a pre-change baseline
    on the same machine; any new failure is a finding. If the suite cannot run,
    say so explicitly in the review output instead of silently omitting it.
-4. Produce your own findings on the target diff, in `schemas/findings.schema.json`
+5. Produce your own findings on the target diff, in `schemas/findings.schema.json`
    shape (`file, line, severity, title, detail`), applying the packs.
    Write to a temp JSON file.
-5. Get Codex's findings: `consort-review.sh` returns the same schema (packs are
+6. Get Codex's findings: `consort-review.sh` returns the same schema (packs are
    injected into its prompt by the script).
-6. Merge: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json codex.json`.
-7. Present in this order: **Both agree** (act first), **Codex only** (what you missed,
-   the real payoff), **Claude only** (Codex missed). Verify each cross-model finding
+7. Merge: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json codex.json`.
+8. Present in this order: **Both agree** (act first), **Codex only** (what you missed,
+   the real payoff), **Claude only** (Codex missed), then **Scanners** (the
+   deterministic tier from step 3, with your reachability verdicts). Verify each
+   cross-model finding
    before treating it as real; a second model's finding is a lead, not a verdict.
-8. Grade, answer, and (when fixes touch guards, teardown, or concurrency paths)
+9. Grade, answer, and (when fixes touch guards, teardown, or concurrency paths)
    re-check per `rules/finding-discipline.md`: the fix pass is part of the
    review, not a new review.
 
