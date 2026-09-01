@@ -44,7 +44,7 @@ Each phase has: inputs, actors, mode, an artifact it writes, and a gate to advan
 | 2 | **Spec** | Panel: an independent spawned agent per vendor drafts a spec; the principal scores + synthesizes (does not draft) | `.consort/spec.md` | human approves the synthesized spec |
 | 3 | **Plan** | Fable decomposes into tasks; sol refutes the plan (`consort:plan`) | `.consort/plan.md`, `.consort/tasks.json` | plan survives refutation |
 | 4 | **Implement** | Per task: Fable delegates to sol (`codex exec`); Fable never writes bulk code | code on a branch + `.consort/scoreboard.md` | task DoD (its tests) pass |
-| 5 | **Review** | Fable + sol review the diff independently → merge (`consort:review`) | `.consort/review.md` | no unresolved critical/high finding |
+| 5 | **Review** | Fable + sol review the diff independently → merge (`consort:review`); a blind security side-agent and the scanner tier (`consort-scan.sh`) run alongside | `.consort/review.md`, `.consort/scan.json` | no unresolved critical/high finding, scanner criticals included |
 | 6 | **Gate** | CI script, no model | exit code | structural checks pass |
 
 Human approval points: end of Interview (scope), end of Spec (the contract), and the
@@ -102,7 +102,9 @@ Instruments (one observable per phase — if it can't be inspected, it isn't don
 - Spec → `.consort/spec.md` shows ≥2 vendor drafts scored + a synthesis with attribution.
 - Plan → `.consort/tasks.json` non-empty; refutation notes present.
 - Implement → branch has commits authored via sol; each task's tests green.
-- Review → `.consort/review.md` shows both-agree / model-only buckets.
+- Review → `.consort/review.md` shows both-agree / model-only buckets, a
+  Security agent section (blind side-agent findings), and a Scanners section
+  (or the scan's explicit SKIPPED lines); `.consort/scan.json` exists.
 - Gate → CI exits 0.
 - **End to end:** one human command starts it, two approval gates, a reviewed branch out.
   No manual step between phases.

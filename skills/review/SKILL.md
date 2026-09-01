@@ -79,13 +79,26 @@ stated, graded, answered across rounds, and re-checked after fixes; and
 5. Produce your own findings on the target diff, in `schemas/findings.schema.json`
    shape (`file, line, severity, title, detail`), applying the packs.
    Write to a temp JSON file.
-6. Get Codex's findings: `consort-review.sh` returns the same schema (packs are
-   injected into its prompt by the script).
-7. Merge: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json codex.json`.
+6. In parallel, get the two independent passes:
+   - **Codex:** `consort-review.sh` returns the schema (packs are injected
+     into its prompt by the script).
+   - **Security side-agent:** write the exact diff under review to a temp
+     file (same diff for uncommitted, staged, or branch-vs-base targets),
+     then spawn the plugin's `security-reviewer` agent (non-inheriting —
+     never a context-forking spawn) with the workdir, that diff file path,
+     and the rule pack paths. The agent has no shell by design and never
+     regenerates the diff itself. It reviews security classes only and
+     returns the same findings schema. Same vendor as you, different
+     context: it covers the independence axis the duet's cross-vendor pass
+     doesn't need, and it reads the diff without your authoring assumptions.
+7. Merge the duet: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json codex.json`.
 8. Present in this order: **Both agree** (act first), **Codex only** (what you missed,
-   the real payoff), **Claude only** (Codex missed), then **Scanners** (the
-   deterministic tier from step 3, with your reachability verdicts). Verify each
-   cross-model finding
+   the real payoff), **Claude only** (Codex missed), then **Security agent**
+   (side-agent findings; fold one into a duet finding only when it names the
+   SAME trigger — two defects can share a file and line, so location match
+   alone never discards a finding), then
+   **Scanners** (the deterministic tier from step 3, with your reachability
+   verdicts). Verify each cross-model or side-agent finding
    before treating it as real; a second model's finding is a lead, not a verdict.
 9. Grade, answer, and (when fixes touch guards, teardown, or concurrency paths)
    re-check per `rules/finding-discipline.md`: the fix pass is part of the

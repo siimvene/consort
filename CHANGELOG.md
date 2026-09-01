@@ -26,6 +26,12 @@ still in 0.x.
   the diff are pre-existing debt except live credentials and criticals in
   newly added dependencies, which always gate.
 - New command `/consort:scan` — run the scanner tier standalone and triage.
+- **Security side-agent: `agents/security-reviewer`.** A blind, security-only
+  subagent the review loop spawns in parallel with the cross-vendor pass —
+  non-inheriting by contract, security classes only, findings returned in the
+  shared schema and presented as their own column. Covers the
+  independent-context axis on the same-vendor side; it complements, never
+  satisfies, the cross-vendor requirement.
 - Review loop (skill + lifecycle phase 5) gained a scanner step; merged
   reviews now present a fourth column, **Scanners**, after the cross-model
   three.

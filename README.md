@@ -104,6 +104,12 @@ required; every skipped scanner is reported loudly, never silently. Rule-based
 scanners and model reviewers catch nearly disjoint defect sets — that
 zero-overlap is why both tiers run.
 
+**Security side-agent:** the plugin also ships an `agents/security-reviewer`
+subagent — a blind, security-only reviewer the review loop spawns in parallel
+with the cross-vendor pass. It inherits no session context, so it reads the
+diff without the author's assumptions; its findings merge as their own column
+and are verified like any cross-model lead.
+
 Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-demo`
 
 ## Mechanics — what actually executes
