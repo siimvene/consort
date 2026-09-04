@@ -26,12 +26,20 @@ else
   DIFF="$(git diff HEAD)"
 fi
 
-# Whitespace-only check must stay linear: ${DIFF//[[:space:]]/} is quadratic
-# in macOS's system bash 3.2 and spins for CPU-hours on a multi-KB diff.
-if ! printf '%s' "$DIFF" | grep -q '[^[:space:]]'; then
-  echo '{"findings":[]}'
-  exit 0
-fi
+# Whitespace-only check must stay linear AND must not pipe: ${DIFF//[[:space:]]/}
+# is quadratic in macOS's system bash 3.2, and the obvious
+# `printf '%s' "$DIFF" | grep -q ...` is WORSE THAN WRONG under `set -o pipefail`.
+# `grep -q` exits on its first match, closing the pipe; once the diff exceeds the
+# 64KB pipe buffer, printf is still writing and takes SIGPIPE, so the pipeline
+# reports 141 and this guard concludes "whitespace-only" for a perfectly good
+# diff — returning an empty findings array, exit 0, silently skipping the entire
+# review. It skipped exactly the large diffs that most need reviewing (measured
+# 2026-09-04: a 96KB kvart diff, review never invoked, verdict "clean").
+# A case glob is linear, allocates nothing, and spawns no process.
+case "$DIFF" in
+  *[![:space:]]*) : ;;
+  *) echo '{"findings":[]}'; exit 0 ;;
+esac
 
 OUT="$(mktemp)"
 DIFF_FILE="$(mktemp)"
@@ -88,6 +96,13 @@ consort_codex_call read-only "$SCHEMA" "$PWD" "$INSTRUCTIONS" "$OUT" "$DIFF_FILE
 if [ -s "$OUT" ]; then
   cat "$OUT"
 else
-  # Codex produced no schema-conforming final message (error, timeout, or refusal).
-  echo '{"findings":[]}'
+  # Codex produced no schema-conforming final message (error, timeout, or
+  # refusal). This is a FAILED review, not a clean one, and the two must never
+  # be indistinguishable: emitting `{"findings":[]}` here let a spend-cap error
+  # read as a passed gate on stdout, with exit 0 and empty stderr. The gate's
+  # own rule is hard-fail, never silently degrade — so say so, and exit non-zero
+  # so a caller that checks status cannot mistake this for a review.
+  echo 'consort-review: Codex returned no schema-conforming result — review DID NOT RUN.' >&2
+  echo 'consort-review: this is a FAILED gate, not a clean diff. Check `codex exec` reachability.' >&2
+  exit 3
 fi
