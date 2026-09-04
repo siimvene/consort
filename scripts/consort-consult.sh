@@ -12,8 +12,8 @@ SCHEMA="${1:?schema file required}"
 PROMPT="${2:?prompt required}"
 WORKDIR="${3:-$PWD}"
 
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex-backend.sh"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/consort-backend.sh"
 
 OUT="$(mktemp)"; trap 'rm -f "$OUT"' EXIT
-consort_codex_call read-only "$SCHEMA" "$WORKDIR" "$PROMPT" "$OUT" || true
+consort_impl_call read-only "$SCHEMA" "$WORKDIR" "$PROMPT" "$OUT" || true
 if [ -s "$OUT" ]; then cat "$OUT"; else echo '{}'; fi

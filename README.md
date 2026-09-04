@@ -19,7 +19,7 @@ and no model's work ships on its own word.
 |---|---|---|
 | **Reference pair** | Claude Code session (e.g. `claude-fable-5`) | `codex exec` (default `gpt-5.6-sol`) |
 | **Job** | Orchestrates every phase, holds the thread, reviews, adjudicates, and **verifies everything itself**. Writes glue, never bulk code. Also a blind panel voice via headless `claude -p`. | Implements in a workspace-write sandbox, and serves as the second blind voice in panels and reviews. Returns schema-forced results, never prose. |
-| **Swap it** | any strong session model | `CONSORT_IMPL_MODEL` env var |
+| **Swap it** | any strong session model | model via `CONSORT_IMPL_MODEL`; whole vendor via `CONSORT_BACKEND=codex\|gemini` |
 
 Cross-vendor is the point: two model families don't share blind spots (in the SWE-chat
 4-tool study, 93.4% of issues were caught by exactly one tool). Every substantive
@@ -124,10 +124,16 @@ Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-dem
 | `schemas/` | One shared shape per artifact type (`spec`, `findings`, `task-result`) is what makes two vendors comparable and machine-mergeable |
 | `.consort/` | The state bus: every phase resumes from disk; the session dying loses nothing |
 
-## Codex backends
+## Backends
 
-The scripts reach Codex through one of two backends, resolved by
-`scripts/codex-backend.sh`:
+The implementer/reviewer ("sol") runs on one of two cross-vendor backends,
+chosen at will with `CONSORT_BACKEND` (default `codex`). Both are non-Anthropic,
+so either satisfies the cross-vendor axis when the principal is Claude.
+`scripts/consort-backend.sh` is the dispatcher the caller scripts source.
+
+### `CONSORT_BACKEND=codex` (default) — OpenAI
+
+Reaches Codex through one of two transports, resolved by `scripts/codex-backend.sh`:
 
 - **plugin** — the official Codex Claude Code plugin's companion runtime
   (`codex-companion.mjs task`), auto-detected under
@@ -139,8 +145,25 @@ The scripts reach Codex through one of two backends, resolved by
   `--output-schema` enforcement.
 
 Auto-resolution prefers the plugin when installed; force either with
-`CONSORT_CODEX_BACKEND=plugin|exec`. Delegation entries in `.consort/log.jsonl`
-record which backend served each task.
+`CONSORT_CODEX_BACKEND=plugin|exec`.
+
+### `CONSORT_BACKEND=gemini` — Google (Vertex AI)
+
+Reaches Gemini via ADC (`gcloud`/WIF), no API key, so it works where org policy
+disallows keys. Two transports (`CONSORT_GEMINI_TRANSPORT=cli|api`, auto):
+
+- **cli** — the `gemini` CLI (`@google/gemini-cli`) run in the workdir. Reads
+  the repo for rule-pack sweeps and, in workspace-write, edits files — full
+  implementer parity with Codex. Preferred when installed.
+- **api** — the stdlib Vertex `generateContent` companion (`gemini-companion.py`).
+  Diff-only, read-only; the CI fallback when the CLI isn't installed.
+
+Config: `CONSORT_GEMINI_MODEL` (default `gemini-3.1-pro-preview`),
+`CONSORT_GEMINI_LOCATION` (`global`; `europe-west4` for EU residency),
+`CONSORT_GCP_PROJECT`.
+
+Delegation entries in `.consort/log.jsonl` record which backend + model served
+each task.
 
 ## The rules that keep it honest
 

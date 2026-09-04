@@ -90,8 +90,8 @@ fi
 # read-only sandbox: Codex may read the repo but cannot modify anything.
 # The diff travels as the <stdin> block; the schema is enforced by the backend
 # (--output-schema on exec, prompt contract + extraction on the plugin runtime).
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex-backend.sh"
-consort_codex_call read-only "$SCHEMA" "$PWD" "$INSTRUCTIONS" "$OUT" "$DIFF_FILE" || true
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/consort-backend.sh"
+consort_impl_call read-only "$SCHEMA" "$PWD" "$INSTRUCTIONS" "$OUT" "$DIFF_FILE" || true
 
 if [ -s "$OUT" ]; then
   cat "$OUT"
