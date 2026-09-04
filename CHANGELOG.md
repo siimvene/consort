@@ -5,6 +5,31 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.6.0] — 2026-09-04
+
+### Added
+- **Gemini backend — a first-class cross-vendor implementer/reviewer peer to
+  Codex, chosen at will with `CONSORT_BACKEND=codex|gemini`.** Reaches Google's
+  Gemini on Vertex AI via ADC (`gcloud`/WIF), no API key — usable where org
+  policy disallows keys. Two transports (`CONSORT_GEMINI_TRANSPORT=cli|api`):
+  the `gemini` CLI (`@google/gemini-cli`) run in the workdir for full parity —
+  repo-wide sweeps in review, file edits in workspace-write (delegation) — and a
+  stdlib Vertex `generateContent` companion (`gemini-companion.py`) as a
+  diff-only, read-only CI fallback. Config: `CONSORT_GEMINI_MODEL` (default
+  `gemini-3.1-pro-preview`), `CONSORT_GEMINI_LOCATION` (`global`; `europe-west4`
+  for EU residency), `CONSORT_GCP_PROJECT`. A `consort_gemini_probe` gives the
+  cheap liveness round-trip the honesty rules ask for.
+- **`scripts/consort-backend.sh` — backend dispatcher.** The single entry point
+  the caller scripts source; forwards `consort_impl_call` / `consort_backend` /
+  `consort_impl_model` / `consort_impl_probe` to the selected backend. Codex and
+  Gemini keep their own `consort_<backend>_*` modules.
+
+### Changed
+- `consort-review.sh`, `consort-consult.sh`, `consort-delegate.sh` now source the
+  dispatcher and call `consort_impl_call` instead of `consort_codex_call`
+  directly, so every path (review, consult, delegate) honors `CONSORT_BACKEND`.
+  Default behavior (Codex) is unchanged.
+
 ## [0.5.0] — 2026-09-01
 
 ### Added

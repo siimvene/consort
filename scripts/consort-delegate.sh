@@ -38,15 +38,17 @@ RESULT="$CONSORT/tasks/$TASK_ID.result.json"
 
 SYS="You are sol, the implementer in the consort harness. Execute the task in the brief on stdin. Iterate until its definition of done is observed, or stop only at a blocker a human must resolve. Do not hand unfinished checks back to the orchestrator. Keep verbose output in files; your returned summary must be short. Set task_id to '$TASK_ID'. Return only a task-result object matching the provided schema."
 
-# workspace-write: sol may create/modify files within WORKDIR but not outside it.
-. "$ROOT/scripts/codex-backend.sh"
-BACKEND="$(consort_codex_backend)"
-consort_codex_call workspace-write "$SCHEMA" "$WORKDIR" "$SYS" "$RESULT" "$CONSORT/tasks/$TASK_ID.brief.md" || true
+# workspace-write: the implementer may create/modify files within WORKDIR but
+# not outside it. Backend (codex/gemini) is chosen by CONSORT_BACKEND.
+. "$ROOT/scripts/consort-backend.sh"
+BACKEND="$(consort_backend)"
+MODEL="$(consort_impl_model)"
+consort_impl_call workspace-write "$SCHEMA" "$WORKDIR" "$SYS" "$RESULT" "$CONSORT/tasks/$TASK_ID.brief.md" || true
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [ ! -s "$RESULT" ]; then
   # sol produced no schema-conforming final message (error/timeout/refusal).
-  printf '{"task_id":"%s","status":"blocked","summary":"no structured result from sol","artifacts":[],"blockers":["codex returned no schema-conforming output"]}\n' "$TASK_ID" > "$RESULT"
+  printf '{"task_id":"%s","status":"blocked","summary":"no structured result from the implementer","artifacts":[],"blockers":["%s backend returned no schema-conforming output"]}\n' "$TASK_ID" "$BACKEND" > "$RESULT"
 fi
 
 printf '{"ts":"%s","event":"delegate","task_id":"%s","model":"%s","backend":"%s","result":"%s"}\n' \
