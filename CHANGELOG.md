@@ -5,6 +5,38 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.7.1] — 2026-09-07
+
+### Fixed
+- **Gemini cli transport ran a different model than asked.** gemini-cli
+  (0.58.0, Vertex auth) treats any model id ending in `flash` as its flash
+  alias and, with its 3.5-flash GA flag on, replaces it with its own default:
+  `CONSORT_GEMINI_MODEL=gemini-3.8-flash` reviewed as gemini-3.5-flash and only
+  the CLI's session log said so. The transport now runs every cli call with the
+  CLI's experimental `dynamicModelConfiguration` resolver (passes unknown ids
+  through untouched), enabled through a throwaway system settings file via
+  `GEMINI_CLI_SYSTEM_SETTINGS_PATH` and layered over any real system settings —
+  user and workspace settings are not touched. Every cli call and probe also
+  runs with `--output-format json` and is checked against the envelope's
+  `stats.models`: a run served by anything but the requested model is
+  discarded as a failed call (empty result, exit 3 from `consort-review.sh`),
+  never reported as a verdict. The same envelope yields one stderr line of
+  evidence per call — tool calls, input/cached/thought/output tokens — so
+  "did the reviewer really run, and did it read the repo" no longer needs the
+  session log. Measured after the fix on the 25-file kvart PR #18 pre-fix
+  diff: gemini-3.8-flash 496 s, 66 tool calls, 10.4M input tokens (9.7M
+  cached); gemini-3.1-pro-preview 382 s, 36 tool calls.
+  Hardened by the blind security pass before release: the throwaway settings
+  live in an owner-only temp *directory* (the CLI derives its system-defaults
+  path from the settings file's directory, so a bare file in `$TMPDIR` would
+  have had it load a `/tmp/system-defaults.json` any local user could
+  pre-create) with `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` pinned to the real
+  location; the real system settings are copied JSONC-tolerantly and the call
+  fails closed if they exist but cannot be read or parsed; the served-model
+  check requires the requested model to be the only one with main-role turns,
+  so a mid-run fallback is discarded too; the temp directory is removed on
+  Ctrl-C, timeout kill and `set -e` alike.
+
 ## [0.7.0] — 2026-09-07
 
 ### Changed

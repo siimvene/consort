@@ -58,17 +58,192 @@ consort_gemini_backend() {
   echo "gemini"; return 0
 }
 
+# gemini-cli rewrites model ids. Measured 2026-09-07 on 0.58.0 with Vertex
+# auth: `-m gemini-3.8-flash` ran gemini-3.5-flash. Its resolver treats any id
+# ending in "flash" as the flash alias and, once the CLI's 3.5-flash GA flag is
+# on (it is for Vertex/Gemini auth), replaces it with its own default; the
+# session log was the only witness. The CLI's experimental
+# dynamicModelConfiguration resolver passes unknown ids through untouched, so
+# every cli invocation gets it via a throwaway SYSTEM settings file (the
+# GEMINI_CLI_SYSTEM_SETTINGS_PATH hook) layered over whatever real system
+# settings exist. User and workspace settings are never touched.
+_consort_gemini_system_settings_default() {
+  case "$(uname -s)" in
+    Darwin)                  echo "/Library/Application Support/GeminiCli/settings.json" ;;
+    MINGW*|MSYS*|CYGWIN*)    echo "${PROGRAMDATA:-C:/ProgramData}/gemini-cli/settings.json" ;;
+    *)                       echo "/etc/gemini-cli/settings.json" ;;
+  esac
+}
+# Writes the throwaway system settings to $1: the real system settings (JSONC
+# allowed, as the CLI allows) plus the resolver flag. FAILS CLOSED: a system
+# file that exists but cannot be read or parsed aborts the call rather than
+# silently dropping an admin layer (tool exclusions, MCP allowlist, sandbox
+# policy) from a run that may be --yolo.
+_consort_gemini_write_settings() {
+  local base="${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-$(_consort_gemini_system_settings_default)}"
+  python3 - "$base" "$1" <<'EOF'
+import json, os, sys
+base, out = sys.argv[1], sys.argv[2]
+
+def strip_jsonc(text):
+    # Remove // and /* */ comments outside strings; the CLI accepts them.
+    res, i, n, in_str = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_str:
+            res.append(c)
+            if c == "\\" and i + 1 < n:
+                res.append(text[i + 1]); i += 2; continue
+            if c == '"':
+                in_str = False
+            i += 1; continue
+        if c == '"':
+            in_str = True; res.append(c); i += 1; continue
+        if text.startswith("//", i):
+            j = text.find("\n", i); i = n if j < 0 else j; continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2); i = n if j < 0 else j + 2; continue
+        res.append(c); i += 1
+    return "".join(res)
+
+s = {}
+if os.path.exists(base):
+    try:
+        with open(base) as fh:
+            raw = fh.read()
+        stripped = strip_jsonc(raw)
+        s = json.loads(stripped) if stripped.strip() else {}
+    except Exception as e:
+        print(f"consort: gemini system settings {base} exist but could not be read/parsed "
+              f"({type(e).__name__}); refusing to run the CLI without its admin layer", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(s, dict):
+        print(f"consort: gemini system settings {base} are not a JSON object; refusing to run", file=sys.stderr)
+        sys.exit(1)
+s.setdefault("experimental", {})["dynamicModelConfiguration"] = True
+with open(out, "w") as fh:
+    json.dump(s, fh)
+EOF
+}
+
+# Runs the gemini CLI once, with the throwaway settings, inside a subshell that
+# owns an owner-only temp DIRECTORY and removes it on any exit (EXIT trap fires
+# on Ctrl-C, timeout kill and set -e alike). A directory, not a file in
+# $TMPDIR: the CLI derives its system-defaults path from the DIRNAME of the
+# system settings path, so a bare file in a shared /tmp would make it load
+# /tmp/system-defaults.json — pre-creatable by any local user, and settings
+# feed mcpServers (child processes) and telemetry endpoints. The real
+# system-defaults path is pinned explicitly for the same reason.
+#   $1 = workdir ("" = stay put); rest = extra gemini args. Stdin passes through.
+#   The CLI's stderr goes to $CONSORT_GEMINI_STDERR (default /dev/null),
+#   resolved against the caller's cwd and created owner-only HERE before the
+#   cd — a redirection on the caller's side would be opened with the
+#   caller's umask instead, and a relative path after the cd would land in
+#   the workdir.
+_consort_gemini_cli() {
+  local workdir="$1"; shift
+  # Resolve the stderr capture path BEFORE cd, or a relative
+  # CONSORT_GEMINI_STDERR would land inside the (possibly untrusted,
+  # possibly ephemeral) workdir. Create it owner-only up front; the CLI then
+  # runs under the user's own umask, because a umask around the whole
+  # process would also make every file a workspace-write run creates 0600.
+  local errf="${CONSORT_GEMINI_STDERR:-/dev/null}"
+  case "$errf" in /*) ;; *) errf="$PWD/$errf" ;; esac
+  [ "$errf" = /dev/null ] || ( umask 077; : >> "$errf" ) || return 1
+  (
+    d="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/consort-gemini.XXXXXX")" || exit 1
+    trap 'rm -rf "$d"' EXIT
+    trap 'rm -rf "$d"; exit 130' INT TERM HUP
+    ( umask 077 && _consort_gemini_write_settings "$d/settings.json" ) || exit 1
+    if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
+    defaults="${GEMINI_CLI_SYSTEM_DEFAULTS_PATH:-$(dirname "${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-$(_consort_gemini_system_settings_default)}")/system-defaults.json}"
+    GOOGLE_GENAI_USE_VERTEXAI=true \
+    GOOGLE_CLOUD_PROJECT="$(_consort_gemini_project)" \
+    GOOGLE_CLOUD_LOCATION="$(_consort_gemini_location)" \
+    GEMINI_CLI_TRUST_WORKSPACE=true \
+    GEMINI_CLI_SYSTEM_SETTINGS_PATH="$d/settings.json" \
+    GEMINI_CLI_SYSTEM_DEFAULTS_PATH="$defaults" \
+    gemini --skip-trust --output-format json "$@" 2>>"$errf"
+  )
+}
+
+# Every cli call runs with --output-format json and is checked against the
+# model it asked for. The envelope's stats name the model(s) that actually
+# served the session; a run served by anything but the requested model is a
+# swap, not a review, and is discarded loudly. Stdin: the envelope. $1: the
+# requested model. Stdout: the model's final message. Stderr: one line of
+# evidence (tool calls, tokens) — the "did the reviewer really run" check
+# without opening the session log. Exit 2 on swap or no envelope.
+_consort_gemini_unwrap() {
+  # Script via -c, not `python3 -`: stdin carries the envelope, not the code.
+  local script
+  read -r -d '' script <<'EOF' || true
+import json, sys
+want = sys.argv[1]
+raw = sys.stdin.read()
+o = None
+start = raw.find("{")
+if start >= 0:
+    try:
+        o, _ = json.JSONDecoder().raw_decode(raw[start:])
+    except Exception:
+        o = None
+if not isinstance(o, dict) or "response" not in o:
+    print("consort: gemini CLI returned no --output-format json envelope"
+          " — cannot prove which model ran; result discarded", file=sys.stderr)
+    sys.exit(2)
+if o.get("error"):
+    # The formatter can attach a partial response to an error (stream cut,
+    # output cap). A run the CLI itself marked failed is not a review, however
+    # schema-shaped the fragment looks.
+    print(f"consort: gemini CLI marked the run failed (error: {json.dumps(o['error'])[:300]}); "
+          "partial response discarded", file=sys.stderr)
+    sys.exit(2)
+stats = o.get("stats") or {}
+served = {}
+for name, m in (stats.get("models") or {}).items():
+    served[name[7:] if name.startswith("models/") else name] = (m or {}).get("tokens") or {}
+tools = (stats.get("tools") or {}).get("totalCalls", 0)
+# stats.models lists EVERY model that served a turn. A mid-run fallback (quota
+# on the requested model, the CLI finishing on its flash default) leaves the
+# requested id present next to the substitute, so membership is not enough:
+# the requested model must be the only one that served main-role turns (helper
+# roles, if the CLI ever reports any, do not author the verdict).
+def main_turns(name):
+    m = (stats.get("models") or {}).get(name) or (stats.get("models") or {}).get("models/" + name) or {}
+    roles = m.get("roles") or {}
+    if roles:
+        return sum((r or {}).get("totalRequests", 0) for role, r in roles.items() if role == "main")
+    api = m.get("api") or {}
+    if "totalRequests" in api:
+        return api["totalRequests"] or 0
+    return 1  # no roles, no api counters: unknown, so count it (conservative)
+authors = sorted(n for n in served if main_turns(n) > 0)
+if authors != [want]:
+    print(f"consort: gemini CLI answered with {authors or ['<none>']} where only the requested {want} "
+          f"was allowed — model swap or mid-run fallback, not a review; result discarded", file=sys.stderr)
+    sys.exit(2)
+t = served[want]
+print(f"consort: gemini {want} — {tools} tool calls, {t.get('input', 0)} input tokens "
+      f"({t.get('cached', 0)} cached), {t.get('thoughts', 0)} thought tokens, "
+      f"{t.get('candidates', 0)} output tokens", file=sys.stderr)
+sys.stdout.write(o.get("response") or "")
+EOF
+  python3 -c "$script" "${1:?requested model}"
+}
+
 # One cheap round-trip so a caller can prove the reviewer actually answered
 # (a zero-finding review and a dead backend look identical otherwise).
 consort_gemini_probe() {
   local transport; transport="$(consort_gemini_transport)" || return 1
   if [ "$transport" = "cli" ]; then
-    GOOGLE_GENAI_USE_VERTEXAI=true \
-    GOOGLE_CLOUD_PROJECT="$(_consort_gemini_project)" \
-    GOOGLE_CLOUD_LOCATION="$(_consort_gemini_location)" \
-    GEMINI_CLI_TRUST_WORKSPACE=true \
-    gemini --skip-trust -m "$(_consort_gemini_model)" -p "Reply with exactly: GEMINI_ALIVE" 2>/dev/null \
-      | grep -o 'GEMINI_ALIVE' | head -1
+    # The CLI's own stderr is noise (deprecation, ripgrep); the unwrap's is the
+    # evidence line or the reason the probe failed, and stays visible.
+    local model tok; model="$(_consort_gemini_model)"
+    tok="$(_consort_gemini_cli "" -m "$model" -p "Reply with exactly: GEMINI_ALIVE" </dev/null \
+      | _consort_gemini_unwrap "$model" | grep -o 'GEMINI_ALIVE' | head -1)"
+    [ -n "$tok" ] && echo "$tok"
+    [ -n "$tok" ]
   else
     local tok proj loc host
     tok="${CONSORT_GEMINI_TOKEN:-$(gcloud auth print-access-token 2>/dev/null)}"; proj="$(_consort_gemini_project)"; loc="$(_consort_gemini_location)"
@@ -164,20 +339,23 @@ consort_gemini_call() {
   [ "$mode" = "workspace-write" ] && write_flags=(--yolo)
 
   # Prompt (with a possibly large diff) goes on STDIN, not a -p arg, to avoid
-  # ARG_MAX on big diffs. `cd || exit` aborts the subshell on a bad workdir
-  # instead of running gemini in the wrong place.
-  # The stderr capture file can carry auth diagnostics: create it owner-only.
-  local raw
-  raw="$(
-    cd "$workdir" || exit 0
-    umask 077
-    printf '%s' "$prompt" | \
-    GOOGLE_GENAI_USE_VERTEXAI=true \
-    GOOGLE_CLOUD_PROJECT="$(_consort_gemini_project)" \
-    GOOGLE_CLOUD_LOCATION="$(_consort_gemini_location)" \
-    GEMINI_CLI_TRUST_WORKSPACE=true \
-    gemini --skip-trust ${write_flags[@]+"${write_flags[@]}"} -m "$(_consort_gemini_model)" 2>>"${CONSORT_GEMINI_STDERR:-/dev/null}"
-  )"
-  printf '%s' "$raw" | _consort_extract_json > "$out" 2>/dev/null || : > "$out"
+  # ARG_MAX on big diffs. The runner's `cd || exit` aborts on a bad workdir
+  # instead of running gemini in the wrong place, and it opens the stderr
+  # capture file (auth diagnostics) itself, owner-only.
+  local model raw resp; model="$(_consort_gemini_model)"
+  raw="$(printf '%s' "$prompt" | \
+    _consort_gemini_cli "$workdir" ${write_flags[@]+"${write_flags[@]}"} -m "$model")"
+  # The envelope proves which model served the run; a swap is discarded here,
+  # so the caller sees an empty <out> (a FAILED call), never a wrong-model verdict.
+  if ! resp="$(printf '%s' "$raw" | _consort_gemini_unwrap "$model")"; then
+    if [ "$mode" = "workspace-write" ]; then
+      # Attestation runs after the CLI exits; whatever served the rejected run
+      # may already have edited the tree under --yolo. Nothing is reverted here
+      # (the tree can hold the caller's own uncommitted work): say so, loudly.
+      echo "consort: workspace-write run REJECTED after the fact — $workdir may carry edits from a model that was not the requested one; inspect \`git status\` / \`git diff\` there before trusting anything in it" >&2
+    fi
+    : > "$out"; return 0
+  fi
+  printf '%s' "$resp" | _consort_extract_json > "$out" 2>/dev/null || : > "$out"
   [ -s "$out" ] || return 0
 }

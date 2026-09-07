@@ -191,7 +191,14 @@ to; dropped by default). The cli transport backslash-escapes every `@` in the
 prompt — the CLI's `@file` expander otherwise reads a diff's `@@` hunk headers
 as file references — and instructs the model to read touched files and sweep
 callers before answering; left to itself, headless Gemini answers from the diff
-alone.
+alone. The cli transport also pins the model: gemini-cli rewrites unknown ids
+that end in `flash` to its own flash default (measured 2026-09-07:
+`gemini-3.8-flash` ran as gemini-3.5-flash), so every call enables the CLI's
+pass-through resolver via a throwaway system settings file and checks the
+`--output-format json` envelope's `stats.models` against the requested model —
+a swap is a failed call, not a verdict. The same envelope prints one stderr
+line per call (tool calls, input/cached/thought/output tokens), which is the
+"did the reviewer really run" check without opening the session log.
 
 Delegation entries in `.consort/log.jsonl` record which backend + model served
 each task.
