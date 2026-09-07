@@ -36,7 +36,9 @@ expect("file:// url of home", "read", `file://${home}/.zshrc`, "read-only", true
 expect("symlink to home", "read", "homelink/.zshrc", "read-only", true);
 expect("dangling symlink outside (write)", "write", "dangling", "workspace-write", true);
 expect("dangling symlink outside (read)", "read", "dangling", "read-only", true);
-expect("unicode nbsp then parent", "read", " ../outside.txt", "read-only", true);
+// Pi maps the NBSP to a plain space and does NOT trim, so this names a literal
+// " .." directory inside the workdir, not the parent: allowed, and harmless.
+expect("unicode nbsp then parent (literal dir, stays inside)", "read", "\u00A0../outside.txt", "read-only", false);
 expect("nonexistent absolute", "read", "/nonexistent/x", "read-only", true);
 expect("trailing slash parent", "ls", "../", "read-only", true);
 // inside: must be allowed
