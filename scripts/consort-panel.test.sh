@@ -18,7 +18,7 @@ cat > "$T/scripts/consort-review.sh" <<'STUB'
 # stub reviewer: behaviour keyed on STUB_* env; records the env it saw.
 echo "saw backend=${CONSORT_BACKEND:-} provider=${CONSORT_PI_PROVIDER:-unset} model=${CONSORT_PI_MODEL:-unset} impl=${CONSORT_IMPL_MODEL:-unset} gem=${CONSORT_GEMINI_MODEL:-unset} base=${1:-none}" >&2
 key="${CONSORT_BACKEND}:${CONSORT_PI_PROVIDER:-}"
-case ",${STUB_SLEEP:-}," in *",$key,"*) sleep 30 ;; esac
+case ",${STUB_SLEEP:-}," in *",$key,"*) echo $$ > "${STUB_SLEEP_PIDFILE:?}"; sleep 30 ;; esac
 case ",${STUB_FAIL:-}," in *",$key,"*) echo "stub: failed" >&2; exit 3 ;; esac
 case ",${STUB_EXCLUDE:-}," in *",$key,"*) echo '{"findings":[]}'; exit 4 ;; esac
 case ",${STUB_EMPTY_OK:-}," in *",$key,"*) exit 0 ;; esac
@@ -82,13 +82,13 @@ check "excluded + failed -> exit 3" '[ "$rc" -eq 3 ]' "rc=$rc"
 
 # 7. wall-clock cap: a hung leg is killed and reported as timeout; the other leg completes
 D="$T/r7"; start=$(date +%s)
-STUB_SLEEP='pi:google-vertex' CONSORT_PANEL_TIMEOUT=3 CONSORT_REVIEWERS='codex,pi:google-vertex' CONSORT_PANEL_DIR="$D" bash "$PANEL" >/dev/null 2>"$T/e7"; rc=$?
+STUB_SLEEP='pi:google-vertex' STUB_SLEEP_PIDFILE="$T/sleeper.pid" CONSORT_PANEL_TIMEOUT=3 CONSORT_REVIEWERS='codex,pi:google-vertex' CONSORT_PANEL_DIR="$D" bash "$PANEL" >/dev/null 2>"$T/e7"; rc=$?
 el=$(( $(date +%s) - start ))
 check "timeout -> exit 3" '[ "$rc" -eq 3 ]' "rc=$rc"
 check "timeout status" '[ "$(manifest_field "$D/panel.json" pi-google-vertex status)" = timeout ] && [ "$(manifest_field "$D/panel.json" pi-google-vertex exit)" = 124 ]'
 check "timeout fired near the cap, not after the sleep" '[ "$el" -lt 20 ]' "took ${el}s"
 check "other leg still ok" '[ "$(manifest_field "$D/panel.json" codex status)" = ok ]'
-check "hung child is gone" '! pgrep -f "sleep 30" >/dev/null'
+check "hung leg process is gone" '[ -s "$T/sleeper.pid" ] && ! kill -0 "$(cat "$T/sleeper.pid")" 2>/dev/null'
 
 # 8. stale files for this run's legs are removed; unrelated files are kept
 D="$T/r8"; mkdir -p "$D"; echo '{"findings":[{"file":"stale","line":1,"severity":"critical","title":"stale","detail":"d"}]}' > "$D/codex.json"; echo keep > "$D/other.json"

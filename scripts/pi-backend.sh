@@ -117,10 +117,13 @@ except Exception: sys.exit(1)' "$v" "$_CONSORT_PI_MIN_VERSION" \
     return 1
   fi
   _consort_pi_model >/dev/null || return 1
-  if [ -n "${CONSORT_GCP_CREDENTIALS:-}" ] && [ ! -r "$CONSORT_GCP_CREDENTIALS" ]; then
-    echo "consort: CONSORT_GCP_CREDENTIALS is set but not a readable file: $CONSORT_GCP_CREDENTIALS" >&2
-    return 1
-  fi
+  case "$(_consort_pi_provider)" in
+    google*)
+      if [ -n "${CONSORT_GCP_CREDENTIALS:-}" ] && [ ! -r "$CONSORT_GCP_CREDENTIALS" ]; then
+        echo "consort: CONSORT_GCP_CREDENTIALS is set but not a readable file: $CONSORT_GCP_CREDENTIALS" >&2
+        return 1
+      fi ;;
+  esac
   # rg and fd (Debian ships fd as fdfind) on PATH, or already in Pi's own bin
   # (PI_CODING_AGENT_DIR overrides ~/.pi/agent).
   local pidir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" t alt

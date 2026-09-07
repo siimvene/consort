@@ -53,7 +53,7 @@ Each phase writes its artifact before advancing; any phase resumes from disk.
 | 2 | **spec** 🚧 | 🟢 both, blind | Both voices draft **blind**; the principal scores and synthesizes, grafting the best of each with attribution | `spec.md` + both drafts |
 | 3 | **plan** | 🟠 refuted by 🔷 | Decompose into tasks, each with a mechanical definition of done; the implementer refutes the plan | `plan.md` · `tasks.json` |
 | 4 | **implement** | 🔷 types, 🟠 verifies | Delegate via five-part briefs; the principal runs every task's done-check itself | `tasks/*.result.json` |
-| 5 | **review** | 🟢 both, blind | Both review the same diff; findings merge into *both-agree / principal-only / implementer-only* | `review.md` |
+| 5 | **review** | 🟢 both, blind | Every reviewer reads the same diff blind (one implementer, or a panel of several vendors via `CONSORT_REVIEWERS`); findings merge into *caught-by-more-than-one / each-reviewer-only / principal-only* | `review.md` |
 | 6 | **gate** | ⚙️ no model | Structural check that trusts nobody: tests, CI, sources untouched, claims traced | exit code |
 
 🚧 = human gate (scope and spec). Everything between runs unattended.
