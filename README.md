@@ -136,9 +136,11 @@ Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-dem
 
 ## Backends
 
-The implementer/reviewer ("sol") runs on one of two cross-vendor backends,
-chosen at will with `CONSORT_BACKEND` (default `codex`). Both are non-Anthropic,
-so either satisfies the cross-vendor axis when the principal is Claude.
+The implementer/reviewer ("sol") runs on one of three backends, chosen at
+will with `CONSORT_BACKEND` (default `codex`): `codex` and `gemini` are
+non-Anthropic by construction, so either satisfies the cross-vendor axis when
+the principal is Claude; `pi` reaches whichever provider `CONSORT_PI_PROVIDER`
+names and refuses `anthropic` unless you state the principal is not Claude.
 `scripts/consort-backend.sh` is the dispatcher the caller scripts source.
 
 ### `CONSORT_BACKEND=codex` (default) — OpenAI
@@ -231,9 +233,14 @@ fences as data. Workspace-write gets the full built-in tool set and the
 repo's context files, still with `--no-approve` (`.pi/settings.json` can set
 `shellPath`, `.pi/extensions` run at startup). Pi has no OS sandbox: the tool
 allowlist and the workdir are the fences, as with the gemini cli transport's
-`--yolo`. Every run is `--offline`, and the backend refuses to start unless
-`rg` and `fd` are already resolvable — Pi's grep/find tools otherwise fetch an
-unpinned "latest" binary from GitHub on first use.
+`--yolo`, and unlike Codex there is no sandbox at all, so workspace-write is
+opt-in (`CONSORT_PI_UNSANDBOXED_WRITE_OK=1`); review and consult need no
+opt-in. Every run is `--offline`, the backend requires Pi >= 0.84.0 and
+refuses to start unless `rg` and `fd` are already resolvable — Pi's grep/find
+tools otherwise fetch an unpinned "latest" binary from GitHub on first use.
+Extracted results must carry the schema's top-level required keys; `{}` is
+not a clean verdict. Providers without a built-in default model need
+`CONSORT_PI_MODEL` set explicitly.
 
 Auth is Pi's own (`pi auth check --provider <id>`); Vertex reads
 `GOOGLE_APPLICATION_CREDENTIALS` / ADC plus `GOOGLE_CLOUD_PROJECT` and

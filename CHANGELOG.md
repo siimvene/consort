@@ -31,7 +31,12 @@ still in 0.x.
   run is `--offline`; the backend refuses to start unless `rg` and `fd` are
   resolvable, because Pi's grep/find otherwise download an unpinned binary
   from GitHub on first use. Pi has no OS sandbox — the tool allowlist and
-  the workdir are the fences.
+  the workdir are the fences — so workspace-write is opt-in
+  (`CONSORT_PI_UNSANDBOXED_WRITE_OK=1`); `anthropic` as provider is refused
+  unless `CONSORT_PI_SAME_VENDOR_OK=1` states the principal is not Claude;
+  Pi >= 0.84.0 is required; extracted results must carry the schema's
+  top-level required keys; providers without a built-in default model need
+  `CONSORT_PI_MODEL`.
 
 ## [0.7.1] — 2026-09-07
 

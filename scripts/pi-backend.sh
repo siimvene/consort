@@ -57,6 +57,8 @@
 #                            anthropic -> claude-opus-4-8)
 #      CONSORT_PI_THINKING  (default high; off|minimal|low|medium|high|xhigh|max)
 #      CONSORT_PI_STDERR    (file to append Pi's stderr to; dropped by default)
+#      CONSORT_PI_SAME_VENDOR_OK=1        allow provider=anthropic (principal is not Claude)
+#      CONSORT_PI_UNSANDBOXED_WRITE_OK=1  allow workspace-write (no OS sandbox)
 #      Provider auth is Pi's own: `pi auth check --provider <id>`; Vertex reads
 #      GOOGLE_APPLICATION_CREDENTIALS / ADC + GOOGLE_CLOUD_PROJECT/LOCATION.
 
@@ -68,14 +70,34 @@ _consort_pi_model() {
     openai|openai-codex) echo "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" ;;
     google*)             echo "${CONSORT_GEMINI_MODEL:-gemini-3.1-pro-preview}" ;;
     anthropic)           echo "claude-opus-4-8" ;;
-    *)                   echo "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" ;;
+    *) echo "consort: no default model for CONSORT_PI_PROVIDER=$(_consort_pi_provider); set CONSORT_PI_MODEL" >&2; return 1 ;;
   esac
 }
 _consort_pi_thinking() { echo "${CONSORT_PI_THINKING:-high}"; }
 
+# Oldest Pi whose flags and JSON event contract this backend was written and
+# tested against (--offline, --no-approve, --no-context-files, message_end
+# provider/model/usage). An older CLI would silently lack a fence.
+_CONSORT_PI_MIN_VERSION=0.84.0
+
 consort_pi_backend() {
   command -v pi >/dev/null || { echo "consort: pi backend needs the pi CLI (@earendil-works/pi-coding-agent) on PATH" >&2; return 1; }
   command -v python3 >/dev/null || { echo "consort: pi backend needs python3" >&2; return 1; }
+  local v; v="$(pi --version 2>/dev/null | head -1 | tr -d '[:space:]')"
+  python3 -c '
+import sys
+def key(s): return tuple(int(x) for x in s.split("-")[0].split("."))
+try: sys.exit(0 if key(sys.argv[1]) >= key(sys.argv[2]) else 1)
+except Exception: sys.exit(1)' "$v" "$_CONSORT_PI_MIN_VERSION" \
+    || { echo "consort: pi backend needs @earendil-works/pi-coding-agent >= $_CONSORT_PI_MIN_VERSION (found '${v:-none}')" >&2; return 1; }
+  # Cross-vendor is the point of the gate. With the principal on Claude, an
+  # anthropic provider is the same vendor reviewing itself; refuse unless the
+  # operator states the principal is NOT Claude.
+  if [ "$(_consort_pi_provider)" = anthropic ] && [ "${CONSORT_PI_SAME_VENDOR_OK:-}" != 1 ]; then
+    echo "consort: CONSORT_PI_PROVIDER=anthropic is same-vendor for a Claude principal and does not satisfy the cross-vendor gate; set CONSORT_PI_SAME_VENDOR_OK=1 only if the principal is not Claude" >&2
+    return 1
+  fi
+  _consort_pi_model >/dev/null || return 1
   local t
   for t in rg fd; do
     command -v "$t" >/dev/null 2>&1 || [ -x "$HOME/.pi/agent/bin/$t" ] \
@@ -165,10 +187,13 @@ EOF
   python3 -c "$script" "${1:?provider}" "${2:?model}"
 }
 
-# Pull the first balanced JSON object out of the model's final text.
+# Pull the first balanced JSON object out of the model's final text and
+# require the schema's top-level `required` keys: `{}` is a syntactically
+# valid object that merge-findings.mjs would read as a clean verdict.
 _consort_pi_extract_json() {
   python3 -c "
 import sys,json
+schema=json.load(open(sys.argv[1])) if len(sys.argv)>1 else {}
 t=sys.stdin.read()
 s=t.find('{')
 if s<0: sys.exit(1)
@@ -186,8 +211,12 @@ for i in range(s,len(t)):
         d-=1
         if d==0: e=i; break
 if e<0: sys.exit(1)
-sys.stdout.write(json.dumps(json.loads(t[s:e+1])))
-"
+o=json.loads(t[s:e+1])
+missing=[k for k in (schema.get('required') or []) if k not in o]
+if missing:
+    print('consort: pi result lacks required top-level keys %s; not a schema-shaped result' % missing, file=sys.stderr); sys.exit(1)
+sys.stdout.write(json.dumps(o))
+" "$@"
 }
 
 # Runs Pi once in <workdir> ("" = stay put) with the given extra args; the
@@ -204,7 +233,7 @@ _consort_pi_run() {
 }
 
 consort_pi_probe() {
-  local p m tok; p="$(_consort_pi_provider)"; m="$(_consort_pi_model)"
+  local p m tok; p="$(_consort_pi_provider)"; m="$(_consort_pi_model)" || return 1
   tok="$(printf 'Reply with exactly: PI_ALIVE' | \
     _consort_pi_run "" --no-tools --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve \
       --thinking off --system-prompt "Answer exactly as instructed." --provider "$p" --model "$m" \
@@ -216,7 +245,7 @@ consort_pi_probe() {
 consort_pi_call() {
   local mode="${1:?mode required}" schema="${2:?schema required}" workdir="${3:?workdir required}"
   local sys="${4:?sys prompt required}" out="${5:?out-file required}" payload="${6:-}"
-  local p m; p="$(_consort_pi_provider)"; m="$(_consort_pi_model)"
+  local p m; p="$(_consort_pi_provider)"; m="$(_consort_pi_model)" || { : > "$out"; return 0; }
 
   # Refuse a missing workdir — NEVER fall back to a broader directory: in
   # workspace-write Pi edits and runs shell commands wherever it is started.
@@ -230,6 +259,14 @@ consort_pi_call() {
     read-only)
       flags+=(--tools read,grep,find,ls --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve) ;;
     workspace-write)
+      # No OS sandbox: bash/edit/write run with the user's full permissions
+      # and accept paths outside the workdir, so the delegation contract
+      # ("workspace-write cannot modify outside WORKDIR") cannot be enforced
+      # here. Codex has a real sandbox; Pi does not. Explicit opt-in only.
+      if [ "${CONSORT_PI_UNSANDBOXED_WRITE_OK:-}" != 1 ]; then
+        echo "consort: pi workspace-write runs with NO sandbox (bash/edit/write, whole filesystem); set CONSORT_PI_UNSANDBOXED_WRITE_OK=1 to accept that, or delegate through the codex backend" >&2
+        : > "$out"; return 0
+      fi
       flags+=(--tools read,bash,edit,write,grep,find,ls --no-approve) ;;
     *) echo "consort: pi backend: unknown mode '$mode'" >&2; : > "$out"; return 0 ;;
   esac
@@ -253,6 +290,6 @@ consort_pi_call() {
     fi
     : > "$out"; return 0
   fi
-  printf '%s' "$resp" | _consort_pi_extract_json > "$out" 2>/dev/null || : > "$out"
+  printf '%s' "$resp" | _consort_pi_extract_json "$schema" > "$out" || : > "$out"
   [ -s "$out" ] || return 0
 }
