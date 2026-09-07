@@ -111,7 +111,8 @@ if os.path.exists(base):
     try:
         with open(base) as fh:
             raw = fh.read()
-        s = json.loads(strip_jsonc(raw)) if raw.strip() else {}
+        stripped = strip_jsonc(raw)
+        s = json.loads(stripped) if stripped.strip() else {}
     except Exception as e:
         print(f"consort: gemini system settings {base} exist but could not be read/parsed "
               f"({type(e).__name__}); refusing to run the CLI without its admin layer", file=sys.stderr)
@@ -134,6 +135,9 @@ EOF
 # feed mcpServers (child processes) and telemetry endpoints. The real
 # system-defaults path is pinned explicitly for the same reason.
 #   $1 = workdir ("" = stay put); rest = extra gemini args. Stdin passes through.
+#   The CLI's stderr goes to $CONSORT_GEMINI_STDERR (default /dev/null); the
+#   file is opened HERE, after umask 077, so it is owner-only — a redirection
+#   on the caller's side would be opened with the caller's umask instead.
 _consort_gemini_cli() {
   local workdir="$1"; shift
   (
@@ -150,7 +154,7 @@ _consort_gemini_cli() {
     GEMINI_CLI_TRUST_WORKSPACE=true \
     GEMINI_CLI_SYSTEM_SETTINGS_PATH="$d/settings.json" \
     GEMINI_CLI_SYSTEM_DEFAULTS_PATH="$defaults" \
-    gemini --skip-trust --output-format json "$@"
+    gemini --skip-trust --output-format json "$@" 2>>"${CONSORT_GEMINI_STDERR:-/dev/null}"
   )
 }
 
@@ -201,7 +205,10 @@ def main_turns(name):
     roles = m.get("roles") or {}
     if roles:
         return sum((r or {}).get("totalRequests", 0) for role, r in roles.items() if role == "main")
-    return ((m.get("api") or {}).get("totalRequests")) or 1
+    api = m.get("api") or {}
+    if "totalRequests" in api:
+        return api["totalRequests"] or 0
+    return 1  # no roles, no api counters: unknown, so count it (conservative)
 authors = sorted(n for n in served if main_turns(n) > 0)
 if authors != [want]:
     print(f"consort: gemini CLI answered with {authors or ['<none>']} where only the requested {want} "
@@ -224,7 +231,7 @@ consort_gemini_probe() {
     # The CLI's own stderr is noise (deprecation, ripgrep); the unwrap's is the
     # evidence line or the reason the probe failed, and stays visible.
     local model tok; model="$(_consort_gemini_model)"
-    tok="$(_consort_gemini_cli "" -m "$model" -p "Reply with exactly: GEMINI_ALIVE" 2>/dev/null </dev/null \
+    tok="$(_consort_gemini_cli "" -m "$model" -p "Reply with exactly: GEMINI_ALIVE" </dev/null \
       | _consort_gemini_unwrap "$model" | grep -o 'GEMINI_ALIVE' | head -1)"
     [ -n "$tok" ] && echo "$tok"
     [ -n "$tok" ]
@@ -324,11 +331,11 @@ consort_gemini_call() {
 
   # Prompt (with a possibly large diff) goes on STDIN, not a -p arg, to avoid
   # ARG_MAX on big diffs. The runner's `cd || exit` aborts on a bad workdir
-  # instead of running gemini in the wrong place, and its umask keeps the
-  # stderr capture file (auth diagnostics) owner-only.
+  # instead of running gemini in the wrong place, and it opens the stderr
+  # capture file (auth diagnostics) itself, owner-only.
   local model raw resp; model="$(_consort_gemini_model)"
   raw="$(printf '%s' "$prompt" | \
-    _consort_gemini_cli "$workdir" ${write_flags[@]+"${write_flags[@]}"} -m "$model" 2>>"${CONSORT_GEMINI_STDERR:-/dev/null}")"
+    _consort_gemini_cli "$workdir" ${write_flags[@]+"${write_flags[@]}"} -m "$model")"
   # The envelope proves which model served the run; a swap is discarded here,
   # so the caller sees an empty <out> (a FAILED call), never a wrong-model verdict.
   if ! resp="$(printf '%s' "$raw" | _consort_gemini_unwrap "$model")"; then
