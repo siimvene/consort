@@ -137,12 +137,12 @@ EOF
 _consort_gemini_cli() {
   local workdir="$1"; shift
   (
-    d="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/consort-gemini.XXXXXX")" || exit 1
+    umask 077
+    d="$(mktemp -d "${TMPDIR:-/tmp}/consort-gemini.XXXXXX")" || exit 1
     trap 'rm -rf "$d"' EXIT
     trap 'rm -rf "$d"; exit 130' INT TERM HUP
     _consort_gemini_write_settings "$d/settings.json" || exit 1
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
-    umask 077
     defaults="${GEMINI_CLI_SYSTEM_DEFAULTS_PATH:-$(dirname "${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-$(_consort_gemini_system_settings_default)}")/system-defaults.json}"
     GOOGLE_GENAI_USE_VERTEXAI=true \
     GOOGLE_CLOUD_PROJECT="$(_consort_gemini_project)" \
