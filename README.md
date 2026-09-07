@@ -94,6 +94,14 @@ repo; the plugin itself ships only vendor-neutral review methodology in its
 `rules/` directory (`blast-surface.md`, `finding-discipline.md`, and
 `security-review.md`, always injected since 0.4.0, no setup needed).
 
+**Diff excludes:** lockfiles and minified bundles (`*.lock`, `package-lock.json`,
+`pnpm-lock.yaml`, `yarn.lock`, `*.min.js`, `*.min.css`, `*.map`) are left out of
+the review payload by default — every diff byte is re-sent on every reviewer
+turn, and the scanner tier already covers dependency changes. Override with
+`CONSORT_DIFF_EXCLUDE` (colon-separated git pathspec globs; an empty string
+reviews everything). Exclusions are announced on stderr and to the reviewer,
+never applied silently.
+
 **Security scanners (optional):** when [Trivy](https://trivy.dev) is on PATH,
 `consort-scan.sh` adds a deterministic third voice to every review — dependency
 CVEs, leaked secrets, IaC misconfigurations — emitted in the same findings
@@ -147,6 +155,18 @@ Reaches Codex through one of two transports, resolved by `scripts/codex-backend.
 Auto-resolution prefers the plugin when installed; force either with
 `CONSORT_CODEX_BACKEND=plugin|exec`.
 
+The exec transport runs `codex exec --ignore-user-config` with reasoning effort
+pinned (`CONSORT_CODEX_REASONING`, default `high`): the reviewer sees none of
+your `~/.codex/config.toml` plugins, hooks, MCP servers or developer
+instructions, which keeps its context non-inheriting and its bill proportional
+to the diff. Measured 2026-09-07 on a 25-file diff: a stock config whose plugin
+hook matched "parallel mode" in a rule pack fanned the review into three
+subagents (10.7M input tokens, 15 min); the bypass ran the same review in 2.46M
+tokens and 8 min with the same real findings. `CONSORT_CODEX_ARGS` (whitespace-
+split `codex exec` flags) replaces that default; set it to an empty string to
+run with your stock config. The plugin transport uses the plugin runtime's own
+config and takes no flags.
+
 ### `CONSORT_BACKEND=gemini` — Google (Vertex AI)
 
 Reaches Gemini via ADC (`gcloud`/WIF), no API key, so it works where org policy
@@ -160,7 +180,12 @@ disallows keys. Two transports (`CONSORT_GEMINI_TRANSPORT=cli|api`, auto):
 
 Config: `CONSORT_GEMINI_MODEL` (default `gemini-3.1-pro-preview`),
 `CONSORT_GEMINI_LOCATION` (`global`; `europe-west4` for EU residency),
-`CONSORT_GCP_PROJECT`.
+`CONSORT_GCP_PROJECT`, `CONSORT_GEMINI_STDERR` (file to append the CLI's stderr
+to; dropped by default). The cli transport backslash-escapes every `@` in the
+prompt — the CLI's `@file` expander otherwise reads a diff's `@@` hunk headers
+as file references — and instructs the model to read touched files and sweep
+callers before answering; left to itself, headless Gemini answers from the diff
+alone.
 
 Delegation entries in `.consort/log.jsonl` record which backend + model served
 each task.

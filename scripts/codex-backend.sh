@@ -55,11 +55,28 @@ consort_codex_call() {
 
   if [ "$backend" = "exec" ]; then
     local sandbox="$mode"
+    # The reviewer/implementer runs WITHOUT the user's ~/.codex/config.toml by
+    # default: no plugins, plugin hooks, MCP servers or developer_instructions
+    # leak into its context (the non-inheriting-context axis), and the bill
+    # stays proportional to the diff. Measured 2026-09-07 on a 25-file diff:
+    # with the stock config the oh-my-codex plugin's prompt hook matched
+    # "parallel mode" inside a rule pack, fanned the review out into three
+    # subagents and re-prompted from its Stop hook — 10.7M input tokens, 909s;
+    # with --ignore-user-config the same review took 2.46M tokens, 495s, same
+    # real findings. Reasoning effort is pinned because the bypass also drops
+    # the user's model_reasoning_effort. CONSORT_CODEX_ARGS (whitespace-split
+    # `codex exec` flags) replaces this default; set it to an empty string to
+    # run with the stock user config.
+    local default_args="--ignore-user-config -c model_reasoning_effort=${CONSORT_CODEX_REASONING:-high}"
+    local extra=() args="${CONSORT_CODEX_ARGS-$default_args}"
+    [ -n "$args" ] && read -ra extra <<< "$args"
     if [ -n "$payload" ]; then
       codex exec -m "$model" -s "$sandbox" -C "$workdir" --skip-git-repo-check \
+        ${extra[@]+"${extra[@]}"} \
         --output-schema "$schema" -o "$out" "$sys" < "$payload" >/dev/null 2>&1 || true
     else
       codex exec -m "$model" -s "$sandbox" -C "$workdir" --skip-git-repo-check \
+        ${extra[@]+"${extra[@]}"} \
         --output-schema "$schema" -o "$out" "$sys" >/dev/null 2>&1 || true
     fi
     return 0

@@ -75,7 +75,7 @@ consort_gemini_probe() {
     host="https://aiplatform.googleapis.com"; [ "$loc" != global ] && host="https://${loc}-aiplatform.googleapis.com"
     curl -s -X POST "$host/v1/projects/$proj/locations/$loc/publishers/google/models/$(_consort_gemini_model):generateContent" \
       -H "Authorization: Bearer $tok" -H "x-goog-user-project: $proj" -H "Content-Type: application/json" \
-      -d '{"contents":[{"role":"user","parts":[{"text":"Reply with exactly: GEMINI_ALIVE"}]}],"generationConfig":{"maxOutputTokens":16}}' \
+      -d '{"contents":[{"role":"user","parts":[{"text":"Reply with exactly: GEMINI_ALIVE"}]}],"generationConfig":{"maxOutputTokens":256}}' \
       2>/dev/null | grep -o 'GEMINI_ALIVE' | head -1
   fi
 }
@@ -134,14 +134,26 @@ consort_gemini_call() {
     : > "$out"; return 0
   fi
 
+  # Headless gemini answers from the prompt alone unless told otherwise: measured
+  # 2026-09-07 (kvart PR #18 A/B), three review runs made zero tool calls and
+  # missed the one HIGH that needed a caller sweep. Codex does the sweep on its
+  # own; Gemini needs the instruction spelled out.
   local prompt
   prompt="$(
     printf '%s\n\n' "$sys"
+    printf '<transport-note>\nYou are running inside the repository checkout with file-reading and search tools. Before your final answer you MUST use them: read the post-change version of every source file the diff touches; for every function, job, route, unit or symbol the diff removes or renames, search the repository for remaining callers, consumers, schedulers and documentation that depended on it; and perform any rule-pack checks that go beyond the diff. Do not answer from the diff alone. Backslash-escaped at-signs ("@") anywhere in this message are literal at-signs; the backslash only stops the CLI from treating them as file references.\n</transport-note>\n\n'
     if [ -n "$payload" ]; then printf '<stdin>\n'; cat "$payload"; printf '\n</stdin>\n\n'; fi
     printf '<output-contract>\nYour FINAL message must be exactly one JSON object conforming to this JSON Schema. No prose, no code fences, no tool chatter after it.\n'
     cat "$schema"
     printf '\n</output-contract>\n'
   )"
+  # gemini-cli runs every prompt (stdin included) through its @-file expander:
+  # `(?<!\\)@` + path chars. A unified diff's `@@` hunk headers match it, and
+  # the fuzzy path resolver then injects unrelated repo files as "Content from
+  # @@:" (observed: a systemd unit and a Vue component). A backslash before the
+  # @ is the CLI's own escape, and headless mode passes text through without
+  # un-escaping, so the model sees `\@`; the transport-note above explains it.
+  prompt="${prompt//@/\\@}"
 
   # workspace-write auto-approves tools so the model can edit files (--yolo),
   # scoped to the workdir; read-only omits it so no writes happen.
@@ -159,7 +171,7 @@ consort_gemini_call() {
     GOOGLE_CLOUD_PROJECT="$(_consort_gemini_project)" \
     GOOGLE_CLOUD_LOCATION="$(_consort_gemini_location)" \
     GEMINI_CLI_TRUST_WORKSPACE=true \
-    gemini --skip-trust ${write_flags[@]+"${write_flags[@]}"} -m "$(_consort_gemini_model)" 2>/dev/null
+    gemini --skip-trust ${write_flags[@]+"${write_flags[@]}"} -m "$(_consort_gemini_model)" 2>>"${CONSORT_GEMINI_STDERR:-/dev/null}"
   )"
   printf '%s' "$raw" | _consort_extract_json > "$out" 2>/dev/null || : > "$out"
   [ -s "$out" ] || return 0

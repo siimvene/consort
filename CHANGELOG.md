@@ -5,6 +5,44 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.7.0] — 2026-09-07
+
+### Changed
+- **Codex exec transport runs `--ignore-user-config` by default**, reasoning
+  effort pinned via `CONSORT_CODEX_REASONING` (default `high`). The reviewer
+  no longer inherits `~/.codex/config.toml` plugins, plugin hooks, MCP servers
+  or `developer_instructions`. Measured on a 25-file diff: a stock config whose
+  oh-my-codex prompt hook matched "parallel mode" inside a rule pack fanned the
+  review into three subagents and re-prompted from its Stop hook — 10.7M input
+  tokens, 909 s; the bypass reviewed the same diff in 2.46M tokens, 495 s, with
+  the same real findings. `CONSORT_CODEX_ARGS` replaces the default (empty
+  string = stock config).
+- **Diff path excludes in `consort-review.sh`.** Lockfiles and minified bundles
+  are left out of the payload by default (`CONSORT_DIFF_EXCLUDE`, colon-
+  separated git pathspec globs; empty string reviews everything). Excluded
+  files are listed on stderr and told to the reviewer; an all-excluded diff
+  says so instead of passing as clean.
+
+### Fixed
+- **Gemini cli transport reviewed diff-only.** Headless `gemini` made zero
+  tool calls in every review run (three measured), so the "repo-reading"
+  transport could not do the caller sweeps the rule packs ask for. The prompt
+  now orders it to read every touched file and sweep callers, consumers,
+  schedulers and docs of every removed symbol before answering; runs after the
+  fix made 25–34 tool calls.
+- **Gemini cli transport `@` expansion.** The CLI's `@file` expander
+  (`(?<!\\)@` + path chars) read a unified diff's `@@` hunk headers as file
+  references and injected unrelated repo files into the prompt. Every `@` in
+  the prompt is now backslash-escaped, the CLI's own escape, which headless
+  mode passes through as literal text.
+- **Gemini api probe false negative.** `consort_gemini_probe` capped output at
+  16 tokens, which a thinking model spends on thoughts (`finishReason:
+  MAX_TOKENS`, empty text), so a live backend read as dead. Cap raised to 256.
+
+### Added
+- `CONSORT_GEMINI_STDERR`: file to append the Gemini CLI's stderr to (dropped
+  by default).
+
 ## [0.6.0] — 2026-09-04
 
 ### Added
