@@ -5,6 +5,47 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.8.0] — 2026-09-07
+
+### Added
+- **Pi backend — any vendor through one CLI, chosen with
+  `CONSORT_BACKEND=pi`.** Reaches the Pi coding agent
+  (`@earendil-works/pi-coding-agent`): Anthropic, OpenAI (API key or the
+  ChatGPT/Codex subscription OAuth), Google Vertex (ADC / service-account
+  key) and ~25 more providers behind one headless `--mode json` protocol.
+  `CONSORT_PI_PROVIDER` picks the vendor (default `openai-codex`),
+  `CONSORT_PI_MODEL` the model, `CONSORT_PI_THINKING` the effort. Every
+  assistant message Pi emits names its provider, model and usage, so the
+  served-model attestation is native: a run served by anything but the
+  requested provider/model pair, or one Pi marked failed, is discarded as a
+  failed call; every call prints one stderr evidence line (turns, tool
+  calls, tokens, cached, reasoning, cost); the server-reported
+  `responseModel` is checked too where an adapter surfaces it. Read-only
+  calls are non-inheriting (`--tools read,grep,find,ls`, no user
+  extensions/skills/templates, `--no-context-files`, `--no-approve`): Pi
+  folds the workdir's and every ancestor's `AGENTS.md`/`CLAUDE.md` into the
+  system prompt, so a hostile checkout's context file must not reach the
+  reviewer. A fence extension (`scripts/pi-fence.mjs`, loaded with `-e` on
+  every run) bounds Pi's tools to the workdir: every path argument of
+  read/grep/find/ls/edit/write must resolve, symlinks followed, inside it,
+  and read-only refuses bash/edit/write outright — Pi's own tools resolve
+  absolute, `../` and `~` paths and there is no OS sandbox.
+  Workspace-write gets the full tool set and the repo's context files, with
+  `--no-approve` (`.pi/settings.json` `shellPath`, `.pi/extensions`). Every
+  run is `--offline`; the backend refuses to start unless `rg` and `fd` are
+  resolvable, because Pi's grep/find otherwise download an unpinned binary
+  from GitHub on first use. Pi has no OS sandbox — the tool allowlist and
+  the workdir are the fences — so workspace-write is opt-in
+  (`CONSORT_PI_UNSANDBOXED_WRITE_OK=1`); `anthropic` as provider is refused
+  unless `CONSORT_PI_SAME_VENDOR_OK=1` states the principal is not Claude;
+  Pi >= 0.84.0 is required; extracted results are validated against the
+  schema (type, required, enum, items — `{}` and `{"findings":null}` are
+  not clean verdicts); providers without a built-in default model need
+  `CONSORT_PI_MODEL`. The fence also judges the spelling variants Pi's
+  `read` falls back to (NFD, curly apostrophe, AM/PM no-break space) so a
+  repo cannot hide a symlink under a variant name; `scripts/pi-fence.test.mjs`
+  pins 35 cases.
+
 ## [0.7.1] — 2026-09-07
 
 ### Fixed

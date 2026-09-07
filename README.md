@@ -19,7 +19,7 @@ and no model's work ships on its own word.
 |---|---|---|
 | **Reference pair** | Claude Code session (e.g. `claude-fable-5`) | `codex exec` (default `gpt-5.6-sol`) |
 | **Job** | Orchestrates every phase, holds the thread, reviews, adjudicates, and **verifies everything itself**. Writes glue, never bulk code. Also a blind panel voice via headless `claude -p`. | Implements in a workspace-write sandbox, and serves as the second blind voice in panels and reviews. Returns schema-forced results, never prose. |
-| **Swap it** | any strong session model | model via `CONSORT_IMPL_MODEL`; whole vendor via `CONSORT_BACKEND=codex\|gemini` |
+| **Swap it** | any strong session model | model via `CONSORT_IMPL_MODEL`; whole vendor via `CONSORT_BACKEND=codex\|gemini\|pi` (Pi: any provider via `CONSORT_PI_PROVIDER`) |
 
 Cross-vendor is the point: two model families don't share blind spots (in the SWE-chat
 4-tool study, 93.4% of issues were caught by exactly one tool). Every substantive
@@ -136,9 +136,11 @@ Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-dem
 
 ## Backends
 
-The implementer/reviewer ("sol") runs on one of two cross-vendor backends,
-chosen at will with `CONSORT_BACKEND` (default `codex`). Both are non-Anthropic,
-so either satisfies the cross-vendor axis when the principal is Claude.
+The implementer/reviewer ("sol") runs on one of three backends, chosen at
+will with `CONSORT_BACKEND` (default `codex`): `codex` and `gemini` are
+non-Anthropic by construction, so either satisfies the cross-vendor axis when
+the principal is Claude; `pi` reaches whichever provider `CONSORT_PI_PROVIDER`
+names and refuses `anthropic` unless you state the principal is not Claude.
 `scripts/consort-backend.sh` is the dispatcher the caller scripts source.
 
 ### `CONSORT_BACKEND=codex` (default) — OpenAI
@@ -199,6 +201,52 @@ pass-through resolver via a throwaway system settings file and checks the
 a swap is a failed call, not a verdict. The same envelope prints one stderr
 line per call (tool calls, input/cached/thought/output tokens), which is the
 "did the reviewer really run" check without opening the session log.
+
+### `CONSORT_BACKEND=pi` — any vendor via the Pi coding agent
+
+One CLI, every vendor. [Pi](https://github.com/badlogic/pi-mono)
+(`@earendil-works/pi-coding-agent`) is a minimal multi-provider coding agent:
+Anthropic (Pro/Max OAuth or key), OpenAI (API key or the ChatGPT/Codex
+subscription OAuth), Google Vertex (ADC or a service-account key, no API key)
+and ~25 more, all behind one headless JSON-lines protocol. `CONSORT_PI_PROVIDER`
+picks the vendor (default `openai-codex`), `CONSORT_PI_MODEL` the model
+(defaults per provider: `gpt-5.6-sol`, `gemini-3.1-pro-preview`,
+`claude-opus-4-8`), `CONSORT_PI_THINKING` the effort (`high`). Whether a Pi run
+is cross-vendor depends on the provider, not on Pi: with the principal on
+Claude, `anthropic` never satisfies the gate.
+
+Why it earns a backend of its own: every assistant message Pi emits carries
+the provider, the model id and the usage that served it, so the served-model
+attestation the gemini cli transport had to bolt on is native here. Every
+call prints one stderr line (turns, tool calls, tokens, cached, reasoning,
+cost); a run served by any provider/model other than the requested pair is
+discarded as a failed call; where an adapter surfaces the server-reported
+model (`responseModel`), that is checked too. Read-only calls run with
+`--tools read,grep,find,ls`, no user extensions, skills, prompt templates or
+context files (non-inheriting, like Codex's `--ignore-user-config`) and
+`--no-approve`. Context files are off on purpose: Pi folds the workdir's
+`AGENTS.md`/`CLAUDE.md` and every ancestor directory's into the *system*
+prompt; house rules for the review go in `.claude/rules`, which
+`consort-review.sh` fences as data. Pi's own tools resolve any path
+(absolute, `../`, `~`) and Pi has no OS sandbox, so consort loads a fence
+extension (`scripts/pi-fence.mjs`) on every run: every path argument of
+read/grep/find/ls/edit/write must resolve, symlinks followed, inside the
+workdir, and in read-only mode bash/edit/write are refused outright
+(live-tested: `~/.zshrc`, a symlink to `$HOME` inside the workdir and
+`ls ..` blocked; a workdir file read). Workspace-write gets the full built-in
+tool set and the repo's context files, still with `--no-approve`
+(`.pi/settings.json` can set `shellPath`, `.pi/extensions` run at startup);
+its `bash` is a shell the fence cannot bound, so that mode is opt-in
+(`CONSORT_PI_UNSANDBOXED_WRITE_OK=1`); review and consult need no opt-in. Every run is `--offline`, the backend requires Pi >= 0.84.0 and
+refuses to start unless `rg` and `fd` are already resolvable — Pi's grep/find
+tools otherwise fetch an unpinned "latest" binary from GitHub on first use.
+Extracted results are validated against the schema; `{}` and
+`{"findings":null}` are not clean verdicts. Providers without a built-in default model need
+`CONSORT_PI_MODEL` set explicitly.
+
+Auth is Pi's own (`pi auth check --provider <id>`); Vertex reads
+`GOOGLE_APPLICATION_CREDENTIALS` / ADC plus `GOOGLE_CLOUD_PROJECT` and
+`GOOGLE_CLOUD_LOCATION`. `CONSORT_PI_STDERR` captures Pi's stderr (owner-only).
 
 Delegation entries in `.consort/log.jsonl` record which backend + model served
 each task.
