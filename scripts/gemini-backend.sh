@@ -58,17 +58,103 @@ consort_gemini_backend() {
   echo "gemini"; return 0
 }
 
+# gemini-cli rewrites model ids. Measured 2026-09-07 on 0.58.0 with Vertex
+# auth: `-m gemini-3.8-flash` ran gemini-3.5-flash. Its resolver treats any id
+# ending in "flash" as the flash alias and, once the CLI's 3.5-flash GA flag is
+# on (it is for Vertex/Gemini auth), replaces it with its own default; the
+# session log was the only witness. The CLI's experimental
+# dynamicModelConfiguration resolver passes unknown ids through untouched, so
+# every cli invocation gets it via a throwaway SYSTEM settings file (the
+# GEMINI_CLI_SYSTEM_SETTINGS_PATH hook) layered over whatever real system
+# settings exist. User and workspace settings are never touched.
+_consort_gemini_system_settings_default() {
+  case "$(uname -s)" in
+    Darwin) echo "/Library/Application Support/GeminiCli/settings.json" ;;
+    *)      echo "/etc/gemini-cli/settings.json" ;;
+  esac
+}
+_consort_gemini_settings() {
+  local base="${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-$(_consort_gemini_system_settings_default)}"
+  local f; f="$(umask 077 && mktemp "${TMPDIR:-/tmp}/consort-gemini-settings.XXXXXX")" || return 1
+  python3 - "$base" "$f" <<'EOF' || { rm -f "$f"; return 1; }
+import json, os, sys
+base, out = sys.argv[1], sys.argv[2]
+s = {}
+if base and os.path.isfile(base):
+    try:
+        with open(base) as fh:
+            s = json.load(fh)
+    except Exception:
+        s = {}
+if not isinstance(s, dict):
+    s = {}
+s.setdefault("experimental", {})["dynamicModelConfiguration"] = True
+with open(out, "w") as fh:
+    json.dump(s, fh)
+EOF
+  echo "$f"
+}
+
+# Every cli call runs with --output-format json and is checked against the
+# model it asked for. The envelope's stats name the model(s) that actually
+# served the session; a run served by anything but the requested model is a
+# swap, not a review, and is discarded loudly. Stdin: the envelope. $1: the
+# requested model. Stdout: the model's final message. Stderr: one line of
+# evidence (tool calls, tokens) — the "did the reviewer really run" check
+# without opening the session log. Exit 2 on swap or no envelope.
+_consort_gemini_unwrap() {
+  # Script via -c, not `python3 -`: stdin carries the envelope, not the code.
+  local script
+  read -r -d '' script <<'EOF' || true
+import json, sys
+want = sys.argv[1]
+raw = sys.stdin.read()
+o = None
+start = raw.find("{")
+if start >= 0:
+    try:
+        o, _ = json.JSONDecoder().raw_decode(raw[start:])
+    except Exception:
+        o = None
+if not isinstance(o, dict) or "response" not in o:
+    err = (o or {}).get("error") if isinstance(o, dict) else None
+    print("consort: gemini CLI returned no --output-format json envelope"
+          + (f" (error: {json.dumps(err)[:300]})" if err else "")
+          + " — cannot prove which model ran; result discarded", file=sys.stderr)
+    sys.exit(2)
+stats = o.get("stats") or {}
+served = {}
+for name, m in (stats.get("models") or {}).items():
+    served[name[7:] if name.startswith("models/") else name] = (m or {}).get("tokens") or {}
+tools = (stats.get("tools") or {}).get("totalCalls", 0)
+if want not in served:
+    print(f"consort: gemini CLI served {sorted(served) or ['<none>']} instead of the requested "
+          f"{want} — model swap, not a review; result discarded", file=sys.stderr)
+    sys.exit(2)
+t = served[want]
+print(f"consort: gemini {want} — {tools} tool calls, {t.get('input', 0)} input tokens "
+      f"({t.get('cached', 0)} cached), {t.get('thoughts', 0)} thought tokens, "
+      f"{t.get('candidates', 0)} output tokens", file=sys.stderr)
+sys.stdout.write(o.get("response") or "")
+EOF
+  python3 -c "$script" "${1:?requested model}"
+}
+
 # One cheap round-trip so a caller can prove the reviewer actually answered
 # (a zero-finding review and a dead backend look identical otherwise).
 consort_gemini_probe() {
   local transport; transport="$(consort_gemini_transport)" || return 1
   if [ "$transport" = "cli" ]; then
+    local model settings; model="$(_consort_gemini_model)"
+    settings="$(_consort_gemini_settings)" || return 1
     GOOGLE_GENAI_USE_VERTEXAI=true \
     GOOGLE_CLOUD_PROJECT="$(_consort_gemini_project)" \
     GOOGLE_CLOUD_LOCATION="$(_consort_gemini_location)" \
     GEMINI_CLI_TRUST_WORKSPACE=true \
-    gemini --skip-trust -m "$(_consort_gemini_model)" -p "Reply with exactly: GEMINI_ALIVE" 2>/dev/null \
-      | grep -o 'GEMINI_ALIVE' | head -1
+    GEMINI_CLI_SYSTEM_SETTINGS_PATH="$settings" \
+    gemini --skip-trust --output-format json -m "$model" -p "Reply with exactly: GEMINI_ALIVE" 2>/dev/null \
+      | _consort_gemini_unwrap "$model" 2>/dev/null | grep -o 'GEMINI_ALIVE' | head -1
+    rm -f "$settings"
   else
     local tok proj loc host
     tok="${CONSORT_GEMINI_TOKEN:-$(gcloud auth print-access-token 2>/dev/null)}"; proj="$(_consort_gemini_project)"; loc="$(_consort_gemini_location)"
@@ -167,7 +253,8 @@ consort_gemini_call() {
   # ARG_MAX on big diffs. `cd || exit` aborts the subshell on a bad workdir
   # instead of running gemini in the wrong place.
   # The stderr capture file can carry auth diagnostics: create it owner-only.
-  local raw
+  local model settings raw resp; model="$(_consort_gemini_model)"
+  settings="$(_consort_gemini_settings)" || { : > "$out"; return 0; }
   raw="$(
     cd "$workdir" || exit 0
     umask 077
@@ -176,8 +263,15 @@ consort_gemini_call() {
     GOOGLE_CLOUD_PROJECT="$(_consort_gemini_project)" \
     GOOGLE_CLOUD_LOCATION="$(_consort_gemini_location)" \
     GEMINI_CLI_TRUST_WORKSPACE=true \
-    gemini --skip-trust ${write_flags[@]+"${write_flags[@]}"} -m "$(_consort_gemini_model)" 2>>"${CONSORT_GEMINI_STDERR:-/dev/null}"
+    GEMINI_CLI_SYSTEM_SETTINGS_PATH="$settings" \
+    gemini --skip-trust --output-format json ${write_flags[@]+"${write_flags[@]}"} -m "$model" 2>>"${CONSORT_GEMINI_STDERR:-/dev/null}"
   )"
-  printf '%s' "$raw" | _consort_extract_json > "$out" 2>/dev/null || : > "$out"
+  rm -f "$settings"
+  # The envelope proves which model served the run; a swap is discarded here,
+  # so the caller sees an empty <out> (a FAILED call), never a wrong-model verdict.
+  if ! resp="$(printf '%s' "$raw" | _consort_gemini_unwrap "$model")"; then
+    : > "$out"; return 0
+  fi
+  printf '%s' "$resp" | _consort_extract_json > "$out" 2>/dev/null || : > "$out"
   [ -s "$out" ] || return 0
 }
