@@ -5,6 +5,46 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.9.1] — 2026-09-07
+
+### Fixed
+- **`merge-findings.mjs` clusters the same defect anchored on different
+  files.** Two reviewers can pin one defect to two files — one on the script
+  that fails to prune, the other on the unit file being deleted — and
+  file+line clustering showed it as two "only" findings, understating
+  agreement (measured on kvart PR #18: the panel's union was reported as
+  1 agreed + 2 "only" where it was 2 agreed). A finding now also joins a
+  cluster when its title names another member's file (last two path
+  segments, or a bare basename of at least 8 characters, so `run.py` in a
+  title is not a link); the detail is not used because it routinely lists
+  neighbours, and word overlap was rejected because the real case shared one
+  content word. Such clusters are tagged `cross-file`. One reviewer's two
+  findings never merge, as before.
+- Hardened by the gate on that change (Codex, Gemini via Pi, blind security
+  agent): every member of a cluster is printed under its representative, so
+  a cluster can no longer delete a reviewer's text from the report; the
+  title match requires a whole path token (`subtasks/run.py` does not name
+  `tasks/run.py`) and a key that looks like a file (an extension or a path,
+  at least 8 characters — a one-word `file` such as `authorization` cannot
+  act as a keyword magnet); files compare as paths, not through the
+  punctuation-stripping normaliser (`src/foo-bar.js` and `src/foo/bar.js`
+  are distinct); a finding that relates to several clusters merges them
+  when they share no reviewer, so the outcome no longer depends on argument
+  order, and prefers the cluster it names explicitly over the one it merely
+  sits near when they cannot merge; reviewer file strings no longer appear
+  in the tag; a set is capped at 500 findings with a loud stderr line.
+  Second round (Codex, Gemini via Pi): path tokens are extracted from the
+  title and matched as whole-segment suffixes of the other file's path (a
+  full repo-relative path and a trailing period both work now); a bare
+  basename shared by two different paths in the merge names nothing; a
+  finding joins the largest compatible subset of its candidate clusters
+  (no reviewer twice, span within the proximity even after a merge) rather
+  than only the first, so non-disjoint candidates resolve the same way in
+  any argument order; members keep arrival order through merges so the
+  tie-break "earliest set" holds. Still greedy, by construction and now
+  documented: one finding relating to two findings of the same reviewer
+  joins the earlier; proximity grouping within a file follows arrival order.
+
 ## [0.9.0] — 2026-09-07
 
 ### Added

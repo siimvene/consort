@@ -57,35 +57,123 @@ const PROXIMITY = 5; // same file + lines within this many rows => the same find
 const rank = { critical: 0, high: 1, medium: 2, low: 3 };
 const sevRank = (f) => rank[sev(f)] ?? 9;
 
-// Greedy clustering across all sets, in argument order. A finding joins the
-// first cluster in the same file whose full line span, with the new member
-// included, stays within PROXIMITY, and that has no member from its own set
-// yet (two findings from one reviewer are two findings, never one). The span
-// rule stops chaining: lines 10, 15 and 20 are two clusters, not one that
-// spans twice the proximity. Bucketing by line would split findings that
-// straddle a bucket boundary (e.g. line 42 vs 44), so the match is pairwise.
+// Paths compare as paths: lowercase, "./" stripped, duplicate slashes
+// collapsed — never through norm(), which would make src/foo-bar.js and
+// src/foo/bar.js the same file.
+const pathKey = (s) => clean(s).toLowerCase().replace(/^\.\//, '').replace(/\/+/g, '/');
+
+// Two reviewers can anchor the SAME defect on different files: one on the
+// script that fails to prune, the other on the unit file being deleted
+// (measured on kvart PR #18: file+line clustering showed one defect as two
+// "only" findings). Cross-file match: a finding's TITLE names the other
+// finding's file. Titles are short and deliberate, so a file named there is
+// the subject, not a passing mention; the detail is not used because it
+// routinely lists neighbours. The file field is reviewer output, not a
+// verified path, so the match is strict: path-like tokens are extracted from
+// the title (trailing sentence punctuation dropped), and a token names a
+// file only if it is a whole-segment SUFFIX of that file's path
+// (`tasks/run.py` names `src/kvart/tasks/run.py`; `subtasks/run.py` and a
+// one-word "file" such as `authorization` do not), looks like a file (an
+// extension or a slash) and is at least MIN_KEY characters. A bare basename
+// (no slash) is ambiguous when two different paths in the merge share it
+// (`SKILL.md` under two skills), and then names nothing. Word overlap was
+// tried and rejected: the real case shared one content word.
+const MIN_KEY = 8;
+const TITLE_MAX = 400; // matching looks at the head of a title; a reviewer that needs more is not writing a title
+const titleTokens = (f) =>
+  (clean(f.title).toLowerCase().slice(0, TITLE_MAX).match(/[a-z0-9_.@\/-]+/g) ?? [])
+    .map((t) => t.replace(/^[.\/-]+/, '').replace(/[.,;:!?)\]]+$/, ''))
+    .filter((t) => t.length >= MIN_KEY && (t.includes('/') || /\.[a-z0-9]+$/.test(t)));
+const namesFile = (token, file, ambiguousBasenames) => {
+  const pk = pathKey(file);
+  if (!token.includes('/') && ambiguousBasenames.has(token)) return false;
+  return pk === token || pk.endsWith('/' + token);
+};
+const sameDefectAcrossFiles = (a, b, amb) =>
+  pathKey(a.file) !== pathKey(b.file) &&
+  (titleTokens(a).some((t) => namesFile(t, b.file, amb)) || titleTokens(b).some((t) => namesFile(t, a.file, amb)));
+
+// Clustering across all sets, in argument order. A finding is compared with
+// every existing cluster that has no member from its own set (two findings
+// from one reviewer are two findings, never one) and relates to a cluster
+// by (a) proximity — same file, full line span within PROXIMITY, including
+// after any merge (the span rule stops chaining: lines 10, 15 and 20 are two
+// clusters, not one spanning twice the proximity; bucketing by line would
+// split findings that straddle a boundary, so the match is pairwise) — or
+// (b) cross-file, one title naming the other's file. It joins the largest
+// compatible set of related clusters, explicitly named ones first, then
+// near ones, skipping any that would repeat a reviewer or break the span,
+// and those clusters merge through it. So A(a.py), B(b.py) and C(a.py,
+// titled "b.py") are one cluster whatever the argument order. What stays
+// greedy, by construction: when one finding relates to two findings of the
+// SAME reviewer it can join only one (the earlier), and proximity grouping
+// within a file depends on the order findings arrive in.
+const MAX_FINDINGS = 500; // per set; a leg that returns more is not reviewing
 const clusters = [];
+const linesIn = (members, file) => members.filter((m) => pathKey(m.f.file) === file).map((m) => Number(m.f.line) || 0);
+const spanOk = (lines) => lines.length === 0 || Math.max(...lines) - Math.min(...lines) <= PROXIMITY;
+const sameFileNear = (cl, f, line) => {
+  const lines = linesIn(cl.members, pathKey(f.file));
+  return lines.length > 0 && spanOk([...lines, line]);
+};
+const allPaths = new Set(sets.flatMap((s) => (s.findings ?? []).slice(0, MAX_FINDINGS).map((f) => pathKey(f.file))));
+const byBasename = new Map();
+for (const pth of allPaths) { const b = pth.split('/').pop(); byBasename.set(b, (byBasename.get(b) ?? 0) + 1); }
+const ambiguousBasenames = new Set([...byBasename].filter(([, n]) => n > 1).map(([b]) => b));
+let order = 0;
 for (const s of sets) {
-  for (const f of s.findings ?? []) {
+  const findings = s.findings ?? [];
+  if (findings.length > MAX_FINDINGS) {
+    console.error(`merge-findings: ${s.label} returned ${findings.length} findings; only the first ${MAX_FINDINGS} are merged`);
+  }
+  for (const f of findings.slice(0, MAX_FINDINGS)) {
     const line = Number(f.line) || 0;
-    const c = clusters.find((cl) =>
-      !cl.sources.has(s.label) &&
-      cl.file === norm(f.file) &&
-      Math.max(cl.max, line) - Math.min(cl.min, line) <= PROXIMITY);
-    if (c) { c.sources.add(s.label); c.members.push({ src: s.label, f }); c.min = Math.min(c.min, line); c.max = Math.max(c.max, line); }
-    else clusters.push({ file: norm(f.file), sources: new Set([s.label]), members: [{ src: s.label, f }], min: line, max: line });
+    const member = { src: s.label, f, order: order++ };
+    const named = [], near = [];
+    for (const cl of clusters) {
+      if (cl.sources.has(s.label)) continue;
+      if (cl.members.some((m) => sameDefectAcrossFiles(m.f, f, ambiguousBasenames))) named.push(cl);
+      else if (sameFileNear(cl, f, line)) near.push(cl);
+    }
+    // Largest compatible subset, in priority order: no reviewer twice, and
+    // the merged cluster's span in this finding's file within PROXIMITY.
+    const chosen = []; const taken = new Set([s.label]);
+    for (const cl of [...named, ...near]) {
+      if ([...cl.sources].some((src) => taken.has(src))) continue;
+      const merged = [...chosen.flatMap((c) => c.members), ...cl.members, member];
+      if (!spanOk(linesIn(merged, pathKey(f.file)))) continue;
+      chosen.push(cl); for (const src of cl.sources) taken.add(src);
+    }
+    if (!chosen.length) { clusters.push({ sources: new Set([s.label]), members: [member] }); continue; }
+    const [home, ...rest] = chosen;
+    for (const other of rest) {
+      for (const src of other.sources) home.sources.add(src);
+      home.members.push(...other.members);
+      clusters.splice(clusters.indexOf(other), 1);
+    }
+    home.sources.add(s.label); home.members.push(member);
+    home.members.sort((a, b) => a.order - b.order);
   }
 }
-// Representative = the most severe member (ties: earliest set); tags list
-// every reviewer that caught it.
+// Representative = the most severe member (ties: the earliest set, then the
+// earliest finding — members keep arrival order through merges); tags list
+// every reviewer that caught it. Every OTHER member is printed under the
+// representative — a cluster never deletes a finding's text from the
+// report, whatever absorbed it — and a cluster spanning more than one file
+// says so.
 for (const c of clusters) {
-  c.rep = c.members.reduce((best, m) => (sevRank(m.f) < sevRank(best.f) ? m : best), c.members[0]).f;
-  c.tag = [...c.sources].join('+');
+  c.rep = c.members.reduce((best, m) => (sevRank(m.f) < sevRank(best.f) ? m : best), c.members[0]);
+  const files = new Set(c.members.map((m) => pathKey(m.f.file)));
+  c.tag = [...c.sources].join('+') + (files.size > 1 ? '; cross-file' : '');
 }
 
-const bySeverity = (a, b) => sevRank(a.rep) - sevRank(b.rep);
+const bySeverity = (a, b) => sevRank(a.rep.f) - sevRank(b.rep.f);
 const byAgreementThenSeverity = (a, b) => (b.sources.size - a.sources.size) || bySeverity(a, b);
-const fmt = (c) => `  [${sev(c.rep)}] ${clean(c.rep.file)}:${Number(c.rep.line) || 0} — ${clean(c.rep.title)}  [${c.tag}]`;
+const line = (f) => `[${sev(f)}] ${clean(f.file)}:${Number(f.line) || 0} — ${clean(f.title)}`;
+const fmt = (c) => [
+  `  ${line(c.rep.f)}  [${c.tag}]`,
+  ...c.members.filter((m) => m !== c.rep).map((m) => `      · ${line(m.f)}  [${m.src}]`),
+].join('\n');
 
 const counts = sets.map((s) => `${s.findings === null ? 'NO RESULT' : s.findings.length} ${clean(s.label)}`).join(' + ');
 const out = [];

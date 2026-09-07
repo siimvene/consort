@@ -1,7 +1,7 @@
 {
   "name": "consort",
   "displayName": "Consort",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "A second pair of eyes from a different AI. Claude and OpenAI's Codex review each other's work and surface the problems only one of them spotted.",
   "author": {
     "name": "Siim Vene"
