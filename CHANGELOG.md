@@ -26,6 +26,16 @@ still in 0.x.
   session log. Measured after the fix on the 25-file kvart PR #18 pre-fix
   diff: gemini-3.8-flash 496 s, 66 tool calls, 10.4M input tokens (9.7M
   cached); gemini-3.1-pro-preview 382 s, 36 tool calls.
+  Hardened by the blind security pass before release: the throwaway settings
+  live in an owner-only temp *directory* (the CLI derives its system-defaults
+  path from the settings file's directory, so a bare file in `$TMPDIR` would
+  have had it load a `/tmp/system-defaults.json` any local user could
+  pre-create) with `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` pinned to the real
+  location; the real system settings are copied JSONC-tolerantly and the call
+  fails closed if they exist but cannot be read or parsed; the served-model
+  check requires the requested model to be the only one with main-role turns,
+  so a mid-run fallback is discarded too; the temp directory is removed on
+  Ctrl-C, timeout kill and `set -e` alike.
 
 ## [0.7.0] — 2026-09-07
 
