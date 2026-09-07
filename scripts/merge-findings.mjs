@@ -57,71 +57,119 @@ const PROXIMITY = 5; // same file + lines within this many rows => the same find
 const rank = { critical: 0, high: 1, medium: 2, low: 3 };
 const sevRank = (f) => rank[sev(f)] ?? 9;
 
+// Paths compare as paths: lowercase, "./" stripped, duplicate slashes
+// collapsed — never through norm(), which would make src/foo-bar.js and
+// src/foo/bar.js the same file.
+const pathKey = (s) => clean(s).toLowerCase().replace(/^\.\//, '').replace(/\/+/g, '/');
+
 // Two reviewers can anchor the SAME defect on different files: one on the
 // script that fails to prune, the other on the unit file being deleted
 // (measured on kvart PR #18: file+line clustering showed one defect as two
 // "only" findings). Cross-file match: a finding's TITLE names the other
 // finding's file. Titles are short and deliberate, so a file named there is
 // the subject, not a passing mention; the detail is not used because it
-// routinely lists neighbours. Short generic basenames (run.py, index.ts)
-// would match too easily, so a bare basename must be at least MIN_BASENAME
-// characters; a title that carries a path segment (tasks/run.py) matches on
-// the last two segments at any length. Word overlap was tried and rejected:
-// the real case shared one content word.
-const MIN_BASENAME = 8;
+// routinely lists neighbours. The file field is reviewer output, not a
+// verified path, so a key must look like a file (an extension, or a path
+// with a slash), be at least MIN_KEY characters, and match the title as a
+// whole path token (subtasks/run.py does not name tasks/run.py; a bare
+// one-word "file" like "authorization" is not a key at all). Word overlap
+// was tried and rejected: the real case shared one content word.
+const MIN_KEY = 8;
+const TITLE_MAX = 400; // matching looks at the head of a title; a reviewer that needs more is not writing a title
 const fileKeys = (file) => {
-  const parts = String(file ?? '').toLowerCase().split('/').filter(Boolean);
+  const parts = pathKey(file).split('/').filter(Boolean);
+  const base = parts[parts.length - 1] ?? '';
   const keys = [];
   if (parts.length >= 2) keys.push(parts.slice(-2).join('/'));
-  const base = parts[parts.length - 1] ?? '';
-  if (base.length >= MIN_BASENAME) keys.push(base);
-  return keys;
+  if (/\.[a-z0-9]+$/.test(base)) keys.push(base);
+  return keys.filter((k) => k.length >= MIN_KEY);
 };
+const PATH_CHAR = /[a-z0-9_.\/@-]/;
 const titleNamesFile = (f, otherFile) => {
-  const t = String(f.title ?? '').toLowerCase();
-  return fileKeys(otherFile).some((k) => t.includes(k));
+  const t = clean(f.title).toLowerCase().slice(0, TITLE_MAX);
+  return fileKeys(otherFile).some((k) => {
+    let i = t.indexOf(k);
+    while (i >= 0) {
+      const before = i === 0 ? '' : t[i - 1];
+      const after = t[i + k.length] ?? '';
+      if (!PATH_CHAR.test(before) && !PATH_CHAR.test(after)) return true;
+      i = t.indexOf(k, i + 1);
+    }
+    return false;
+  });
 };
 const sameDefectAcrossFiles = (a, b) =>
-  norm(a.file) !== norm(b.file) && (titleNamesFile(a, b.file) || titleNamesFile(b, a.file));
+  pathKey(a.file) !== pathKey(b.file) && (titleNamesFile(a, b.file) || titleNamesFile(b, a.file));
 
-// Greedy clustering across all sets, in argument order. A finding joins the
-// first cluster that has no member from its own set yet (two findings from
-// one reviewer are two findings, never one) and either (a) has members in
-// the same file whose full line span, with the new member included, stays
-// within PROXIMITY — the span rule stops chaining: lines 10, 15 and 20 are
-// two clusters, not one that spans twice the proximity; bucketing by line
-// would split findings that straddle a bucket boundary (e.g. 42 vs 44), so
-// the match is pairwise — or (b) has a member that names this finding's
-// file in its title, or whose file this finding's title names (cross-file).
+// Clustering across all sets, in argument order, order-independent in
+// result: a finding is compared with every existing cluster that has no
+// member from its own set (two findings from one reviewer are two findings,
+// never one) and joins EVERY cluster it relates to — (a) same file, with the
+// full line span within PROXIMITY (the span rule stops chaining: lines 10,
+// 15 and 20 are two clusters, not one spanning twice the proximity;
+// bucketing by line would split findings that straddle a boundary, so the
+// match is pairwise), or (b) cross-file, one title naming the other's file.
+// Clusters it links that do not share a reviewer are merged through it, so
+// A(a.py), B(b.py) and C(a.py, titled "b.py") are one cluster whatever the
+// argument order. If two candidate clusters already share a reviewer they
+// cannot be merged; the finding then goes to the one it names explicitly
+// (cross-file, deliberate) ahead of the one it merely sits near.
+const MAX_FINDINGS = 500; // per set; a leg that returns more is not reviewing
 const clusters = [];
 const sameFileNear = (cl, f, line) => {
-  const same = cl.members.filter((m) => norm(m.f.file) === norm(f.file));
+  const same = cl.members.filter((m) => pathKey(m.f.file) === pathKey(f.file));
   if (!same.length) return false;
   const lines = same.map((m) => Number(m.f.line) || 0);
   return Math.max(...lines, line) - Math.min(...lines, line) <= PROXIMITY;
 };
+const disjointSources = (cls) => {
+  const seen = new Set();
+  for (const cl of cls) for (const src of cl.sources) { if (seen.has(src)) return false; seen.add(src); }
+  return true;
+};
 for (const s of sets) {
-  for (const f of s.findings ?? []) {
+  const findings = s.findings ?? [];
+  if (findings.length > MAX_FINDINGS) {
+    console.error(`merge-findings: ${s.label} returned ${findings.length} findings; only the first ${MAX_FINDINGS} are merged`);
+  }
+  for (const f of findings.slice(0, MAX_FINDINGS)) {
     const line = Number(f.line) || 0;
-    const c = clusters.find((cl) =>
-      !cl.sources.has(s.label) &&
-      (sameFileNear(cl, f, line) || cl.members.some((m) => sameDefectAcrossFiles(m.f, f))));
-    if (c) { c.sources.add(s.label); c.members.push({ src: s.label, f }); }
-    else clusters.push({ sources: new Set([s.label]), members: [{ src: s.label, f }] });
+    const near = [], named = [];
+    for (const cl of clusters) {
+      if (cl.sources.has(s.label)) continue;
+      if (cl.members.some((m) => sameDefectAcrossFiles(m.f, f))) named.push(cl);
+      else if (sameFileNear(cl, f, line)) near.push(cl);
+    }
+    let targets = [...named, ...near];
+    if (targets.length > 1 && !disjointSources(targets)) targets = [targets[0]];
+    if (!targets.length) { clusters.push({ sources: new Set([s.label]), members: [{ src: s.label, f }] }); continue; }
+    const [home, ...rest] = targets;
+    for (const other of rest) {
+      for (const src of other.sources) home.sources.add(src);
+      home.members.push(...other.members);
+      clusters.splice(clusters.indexOf(other), 1);
+    }
+    home.sources.add(s.label); home.members.push({ src: s.label, f });
   }
 }
 // Representative = the most severe member (ties: earliest set); tags list
-// every reviewer that caught it, and a cross-file cluster says so, with
-// every file it spans, so the reader can see why two anchors became one.
+// every reviewer that caught it. Every OTHER member is printed under the
+// representative — a cluster never deletes a finding's text from the
+// report, whatever absorbed it — and a cluster spanning more than one file
+// says so.
 for (const c of clusters) {
-  c.rep = c.members.reduce((best, m) => (sevRank(m.f) < sevRank(best.f) ? m : best), c.members[0]).f;
-  const files = [...new Set(c.members.map((m) => clean(m.f.file)))];
-  c.tag = [...c.sources].join('+') + (files.length > 1 ? `; cross-file: ${files.join(', ')}` : '');
+  c.rep = c.members.reduce((best, m) => (sevRank(m.f) < sevRank(best.f) ? m : best), c.members[0]);
+  const files = new Set(c.members.map((m) => pathKey(m.f.file)));
+  c.tag = [...c.sources].join('+') + (files.size > 1 ? '; cross-file' : '');
 }
 
-const bySeverity = (a, b) => sevRank(a.rep) - sevRank(b.rep);
+const bySeverity = (a, b) => sevRank(a.rep.f) - sevRank(b.rep.f);
 const byAgreementThenSeverity = (a, b) => (b.sources.size - a.sources.size) || bySeverity(a, b);
-const fmt = (c) => `  [${sev(c.rep)}] ${clean(c.rep.file)}:${Number(c.rep.line) || 0} — ${clean(c.rep.title)}  [${c.tag}]`;
+const line = (f) => `[${sev(f)}] ${clean(f.file)}:${Number(f.line) || 0} — ${clean(f.title)}`;
+const fmt = (c) => [
+  `  ${line(c.rep.f)}  [${c.tag}]`,
+  ...c.members.filter((m) => m !== c.rep).map((m) => `      · ${line(m.f)}  [${m.src}]`),
+].join('\n');
 
 const counts = sets.map((s) => `${s.findings === null ? 'NO RESULT' : s.findings.length} ${clean(s.label)}`).join(' + ');
 const out = [];
