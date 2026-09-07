@@ -19,7 +19,7 @@ and no model's work ships on its own word.
 |---|---|---|
 | **Reference pair** | Claude Code session (e.g. `claude-fable-5`) | `codex exec` (default `gpt-5.6-sol`) |
 | **Job** | Orchestrates every phase, holds the thread, reviews, adjudicates, and **verifies everything itself**. Writes glue, never bulk code. Also a blind panel voice via headless `claude -p`. | Implements in a workspace-write sandbox, and serves as the second blind voice in panels and reviews. Returns schema-forced results, never prose. |
-| **Swap it** | any strong session model | model via `CONSORT_IMPL_MODEL`; whole vendor via `CONSORT_BACKEND=codex\|gemini` |
+| **Swap it** | any strong session model | model via `CONSORT_IMPL_MODEL`; whole vendor via `CONSORT_BACKEND=codex\|gemini\|pi` (Pi: any provider via `CONSORT_PI_PROVIDER`) |
 
 Cross-vendor is the point: two model families don't share blind spots (in the SWE-chat
 4-tool study, 93.4% of issues were caught by exactly one tool). Every substantive
@@ -240,8 +240,8 @@ its `bash` is a shell the fence cannot bound, so that mode is opt-in
 (`CONSORT_PI_UNSANDBOXED_WRITE_OK=1`); review and consult need no opt-in. Every run is `--offline`, the backend requires Pi >= 0.84.0 and
 refuses to start unless `rg` and `fd` are already resolvable — Pi's grep/find
 tools otherwise fetch an unpinned "latest" binary from GitHub on first use.
-Extracted results must carry the schema's top-level required keys; `{}` is
-not a clean verdict. Providers without a built-in default model need
+Extracted results are validated against the schema; `{}` and
+`{"findings":null}` are not clean verdicts. Providers without a built-in default model need
 `CONSORT_PI_MODEL` set explicitly.
 
 Auth is Pi's own (`pi auth check --provider <id>`); Vertex reads

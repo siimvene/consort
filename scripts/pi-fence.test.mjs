@@ -52,6 +52,12 @@ expect("symlink inside to inside", "ls", "sublink", "read-only", false);
 expect("new file inside (write, ws-write)", "write", "sub/new.txt", "workspace-write", false);
 expect("new nested dirs inside", "write", "a/b/c.txt", "workspace-write", false);
 expect("dot-dot that stays inside", "read", "sub/../note.txt", "read-only", false);
+// read-path variants Pi would fall back to (resolveReadPath)
+symlinkSync(homedir(), join(wd, "it\u2019s"));           // curly-apostrophe symlink to $HOME
+symlinkSync(join(base, "outside.txt"), join(wd, "Screenshot 1\u202FPM.png")); // NBSP AM/PM variant
+expect("curly-apostrophe variant symlink", "read", "it's/.zshrc", "read-only", true);
+expect("AM/PM NBSP variant symlink", "read", "Screenshot 1 PM.png", "read-only", true);
+expect("variants only apply to read (ls of missing straight name stays inside)", "ls", "it's", "read-only", false);
 // mode rule
 expect("bash in read-only", "bash", undefined, "read-only", true);
 expect("edit in read-only", "edit", "note.txt", "read-only", true);

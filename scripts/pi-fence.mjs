@@ -18,7 +18,10 @@
 // and file:///etc/...); the test file next to this one pins them.
 // Symlinks are followed — including a dangling last component, which
 // existsSync-based walking would have treated as a plain new file — and a
-// not-yet-existing file is judged by where it would land.
+// not-yet-existing file is judged by where it would land. The check and the
+// tool's own open are two steps: a same-uid peer racing a symlink into place
+// between them is out of scope, as it is for every backend without an OS
+// sandbox (Pi has none; that is why workspace-write is opt-in).
 import { resolve, sep, dirname, basename, join, isAbsolute } from "node:path";
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -68,11 +71,34 @@ export function resolveLikePi(input, cwd, home = homedir()) {
   return isAbsolute(n) ? resolve(n) : resolve(cwd, n);
 }
 
+// Pi's `read` (resolveReadPath) falls back to spelling variants of a path
+// that does not exist: a narrow no-break space before AM/PM, NFD, a curly
+// apostrophe, NFD + curly. A hostile repo could ship a symlink under the
+// variant name so that the straight-spelled (nonexistent) path passes the
+// fence while Pi opens the variant. Every variant Pi would try is judged too.
+function exists(p) { try { lstatSync(p); return true; } catch { return false; } }
+export function candidatesLikePi(abs, toolName) {
+  if (toolName !== "read" || exists(abs)) return [abs];
+  const nfd = abs.normalize("NFD");
+  return [
+    abs,
+    abs.replace(/ (AM|PM)\./gi, "\u202F$1."),
+    nfd,
+    abs.replace(/'/g, "\u2019"),
+    nfd.replace(/'/g, "\u2019"),
+  ].filter((v, i, arr) => arr.indexOf(v) === i);
+}
+
 // True when `input`, as Pi's tool will interpret it from `cwd`, lands inside `root`.
-export function inside(input, cwd, root, home = homedir()) {
-  let abs;
-  try { abs = canonical(resolveLikePi(input, cwd, home)); } catch { return false; }
-  return abs === root || abs.startsWith(root + sep);
+export function inside(input, cwd, root, home = homedir(), toolName = "read") {
+  let cands;
+  try { cands = candidatesLikePi(resolveLikePi(input, cwd, home), toolName); } catch { return false; }
+  for (const c of cands) {
+    let abs;
+    try { abs = canonical(c); } catch { return false; }
+    if (!(abs === root || abs.startsWith(root + sep))) return false;
+  }
+  return true;
 }
 
 export function judge(toolName, input, cwd, root, mode, home = homedir()) {
@@ -81,7 +107,7 @@ export function judge(toolName, input, cwd, root, mode, home = homedir()) {
   }
   if (PATH_TOOLS.has(toolName)) {
     const raw = input && input.path != null && input.path !== "" ? input.path : ".";
-    if (!inside(raw, cwd, root, home)) {
+    if (!inside(raw, cwd, root, home, toolName)) {
       return { block: true, reason: `consort fence: ${toolName} on '${raw}' resolves outside the workdir ${root}; only files under the workdir may be read or changed` };
     }
   }

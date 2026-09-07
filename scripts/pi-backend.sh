@@ -107,9 +107,12 @@ except Exception: sys.exit(1)' "$v" "$_CONSORT_PI_MIN_VERSION" \
     return 1
   fi
   _consort_pi_model >/dev/null || return 1
-  local t
+  # rg and fd (Debian ships fd as fdfind) on PATH, or already in Pi's own bin
+  # (PI_CODING_AGENT_DIR overrides ~/.pi/agent).
+  local pidir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" t alt
   for t in rg fd; do
-    command -v "$t" >/dev/null 2>&1 || [ -x "$HOME/.pi/agent/bin/$t" ] \
+    alt="$t"; [ "$t" = fd ] && alt=fdfind
+    command -v "$t" >/dev/null 2>&1 || command -v "$alt" >/dev/null 2>&1 || [ -x "$pidir/bin/$t" ] \
       || { echo "consort: pi backend needs '$t' on PATH (ripgrep/fd) — Pi would otherwise fetch an unpinned binary from GitHub on first use; install it first" >&2; return 1; }
   done
   echo "pi"; return 0
@@ -179,7 +182,11 @@ if served != {(want_p, want_m)}:
     print(f"consort: pi run was served by {sorted(f'{p}/{m}' for p, m in served)} where only the requested "
           f"{want_p}/{want_m} was allowed — model swap, not a result; discarded", file=sys.stderr)
     sys.exit(2)
-bad = sorted(r for r in served_response if not (r == want_m or r.startswith(want_m + "-") or r.endswith("/" + want_m)))
+# Exact id, or the id with a dated deployment suffix (-YYYY-MM-DD); nothing
+# else — "gpt-5-mini" must not pass for "gpt-5".
+import re
+ok_rm = re.compile(r"^(?:.*/)?" + re.escape(want_m) + r"(?:-\d{4}-\d{2}-\d{2})?$")
+bad = sorted(r for r in served_response if not ok_rm.match(r))
 if bad:
     print(f"consort: provider reported serving {bad} where the requested {want_m} was expected — "
           "server-side substitution, not a result; discarded", file=sys.stderr)
@@ -197,12 +204,38 @@ EOF
 }
 
 # Pull the first balanced JSON object out of the model's final text and
-# require the schema's top-level `required` keys: `{}` is a syntactically
-# valid object that merge-findings.mjs would read as a clean verdict.
+# validate it against the schema (type, required, properties, items, enum,
+# minimum/maximum, minLength — the subset consort's schemas use; no
+# third-party validator is assumed). `{}` and `{"findings":null}` are
+# syntactically valid objects that merge-findings.mjs would read as a
+# clean verdict; they are not results.
 _consort_pi_extract_json() {
   python3 -c "
 import sys,json
 schema=json.load(open(sys.argv[1])) if len(sys.argv)>1 else {}
+def check(v, sc, path='$'):
+    if not isinstance(sc, dict): return []
+    errs=[]
+    ty=sc.get('type')
+    if ty:
+        tys=ty if isinstance(ty,list) else [ty]
+        okmap={'object':lambda x:isinstance(x,dict),'array':lambda x:isinstance(x,list),'string':lambda x:isinstance(x,str),
+               'integer':lambda x:isinstance(x,int) and not isinstance(x,bool),'number':lambda x:isinstance(x,(int,float)) and not isinstance(x,bool),
+               'boolean':lambda x:isinstance(x,bool),'null':lambda x:x is None}
+        if not any(okmap.get(t,lambda x:True)(v) for t in tys): return [f'{path}: expected {ty}']
+    if 'enum' in sc and v not in sc['enum']: errs.append(f'{path}: not in enum')
+    if isinstance(v,dict):
+        for k in sc.get('required') or []:
+            if k not in v: errs.append(f'{path}.{k}: required')
+        for k,sub in (sc.get('properties') or {}).items():
+            if k in v: errs+=check(v[k],sub,f'{path}.{k}')
+    if isinstance(v,list) and isinstance(sc.get('items'),dict):
+        for i,it in enumerate(v): errs+=check(it,sc['items'],f'{path}[{i}]')
+    if isinstance(v,str) and 'minLength' in sc and len(v)<sc['minLength']: errs.append(f'{path}: too short')
+    if isinstance(v,(int,float)) and not isinstance(v,bool):
+        if 'minimum' in sc and v<sc['minimum']: errs.append(f'{path}: below minimum')
+        if 'maximum' in sc and v>sc['maximum']: errs.append(f'{path}: above maximum')
+    return errs
 t=sys.stdin.read()
 s=t.find('{')
 if s<0: sys.exit(1)
@@ -221,9 +254,9 @@ for i in range(s,len(t)):
         if d==0: e=i; break
 if e<0: sys.exit(1)
 o=json.loads(t[s:e+1])
-missing=[k for k in (schema.get('required') or []) if k not in o]
-if missing:
-    print('consort: pi result lacks required top-level keys %s; not a schema-shaped result' % missing, file=sys.stderr); sys.exit(1)
+errs=check(o,schema)
+if errs:
+    print('consort: pi result does not conform to the schema (%s); not a result' % '; '.join(errs[:5]), file=sys.stderr); sys.exit(1)
 sys.stdout.write(json.dumps(o))
 " "$@"
 }
@@ -252,6 +285,10 @@ _consort_pi_run() {
 }
 
 consort_pi_probe() {
+  # The guards (CLI present and new enough, rg/fd, same-vendor refusal, model
+  # default) live in consort_pi_backend; callers that skip consort_backend
+  # must not skip them.
+  consort_pi_backend >/dev/null || return 1
   local p m tok; p="$(_consort_pi_provider)"; m="$(_consort_pi_model)" || return 1
   tok="$(printf 'Reply with exactly: PI_ALIVE' | \
     _consort_pi_run "" --no-tools --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve \
@@ -264,6 +301,9 @@ consort_pi_probe() {
 consort_pi_call() {
   local mode="${1:?mode required}" schema="${2:?schema required}" workdir="${3:?workdir required}"
   local sys="${4:?sys prompt required}" out="${5:?out-file required}" payload="${6:-}"
+  # Same guards as the probe: consort-review.sh / consort-consult.sh call
+  # consort_impl_call without consort_backend first.
+  consort_pi_backend >/dev/null || { : > "$out"; return 0; }
   local p m; p="$(_consort_pi_provider)"; m="$(_consort_pi_model)" || { : > "$out"; return 0; }
 
   # Refuse a missing workdir — NEVER fall back to a broader directory: in

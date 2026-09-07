@@ -38,9 +38,13 @@ still in 0.x.
   the workdir are the fences — so workspace-write is opt-in
   (`CONSORT_PI_UNSANDBOXED_WRITE_OK=1`); `anthropic` as provider is refused
   unless `CONSORT_PI_SAME_VENDOR_OK=1` states the principal is not Claude;
-  Pi >= 0.84.0 is required; extracted results must carry the schema's
-  top-level required keys; providers without a built-in default model need
-  `CONSORT_PI_MODEL`.
+  Pi >= 0.84.0 is required; extracted results are validated against the
+  schema (type, required, enum, items — `{}` and `{"findings":null}` are
+  not clean verdicts); providers without a built-in default model need
+  `CONSORT_PI_MODEL`. The fence also judges the spelling variants Pi's
+  `read` falls back to (NFD, curly apostrophe, AM/PM no-break space) so a
+  repo cannot hide a symlink under a variant name; `scripts/pi-fence.test.mjs`
+  pins 35 cases.
 
 ## [0.7.1] — 2026-09-07
 
