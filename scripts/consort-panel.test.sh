@@ -11,14 +11,20 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/scripts"
 cp "$HERE/consort-panel.sh" "$T/scripts/"
 cat > "$T/scripts/consort-backend.sh" <<'STUB'
-consort_impl_model() { echo "stub:${CONSORT_BACKEND:-codex}/${CONSORT_PI_PROVIDER:-}/${CONSORT_PI_MODEL:-}/${CONSORT_IMPL_MODEL:-}/${CONSORT_GEMINI_MODEL:-}"; }
+consort_impl_model() {
+  case "${CONSORT_BACKEND:-codex}" in
+    pi)     echo "${CONSORT_PI_PROVIDER:-openai-codex}/${CONSORT_PI_MODEL:-default}" ;;
+    gemini) echo "${CONSORT_GEMINI_MODEL:-gemini-default}" ;;
+    *)      echo "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" ;;
+  esac
+}
 STUB
 cat > "$T/scripts/consort-review.sh" <<'STUB'
 #!/usr/bin/env bash
 # stub reviewer: behaviour keyed on STUB_* env; records the env it saw.
 echo "saw backend=${CONSORT_BACKEND:-} provider=${CONSORT_PI_PROVIDER:-unset} model=${CONSORT_PI_MODEL:-unset} impl=${CONSORT_IMPL_MODEL:-unset} gem=${CONSORT_GEMINI_MODEL:-unset} base=${1:-none}" >&2
 key="${CONSORT_BACKEND}:${CONSORT_PI_PROVIDER:-}"
-case ",${STUB_SLEEP:-}," in *",$key,"*) echo $$ > "${STUB_SLEEP_PIDFILE:?}"; sleep 30 ;; esac
+case ",${STUB_SLEEP:-}," in *",$key,"*) echo $$ > "${STUB_SLEEP_PIDFILE:?}"; echo $PPID > "${STUB_SLEEP_PIDFILE}.leader"; sleep 30 ;; esac
 case ",${STUB_FAIL:-}," in *",$key,"*) echo "stub: failed" >&2; exit 3 ;; esac
 case ",${STUB_EXCLUDE:-}," in *",$key,"*) echo '{"findings":[]}'; exit 4 ;; esac
 case ",${STUB_EMPTY_OK:-}," in *",$key,"*) exit 0 ;; esac
@@ -42,7 +48,7 @@ check "leg files present" '[ -s "$D/codex.json" ] && [ -s "$D/pi-google-vertex.j
 check "codex leg saw its backend and the base ref" 'grep -q "saw backend=codex provider=unset .* base=main" "$T/e1"'
 check "pi leg saw provider" 'grep -q "\[pi-google-vertex\] saw backend=pi provider=google-vertex" "$T/e1"'
 check "manifest status ok" '[ "$(manifest_field "$D/panel.json" codex status)" = ok ] && [ "$(manifest_field "$D/panel.json" pi-google-vertex status)" = ok ]'
-check "manifest model resolved under leg env" '[ "$(manifest_field "$D/panel.json" pi-google-vertex model)" = "stub:pi/google-vertex///" ]'
+check "manifest model resolved under leg env" '[ "$(manifest_field "$D/panel.json" pi-google-vertex model)" = "google-vertex/default" ]'
 check "stderr summary per leg" 'grep -q "\[codex\] ok — exit 0" "$T/e1"'
 
 # 2. ambient CONSORT_PI_MODEL is unset for a provider-pinned leg, kept for a bare pi leg, pinned by spec
@@ -56,7 +62,7 @@ check "codex:model -> CONSORT_IMPL_MODEL" 'grep -q "\[codex-gpt-9\] saw backend=
 check "gemini:model -> CONSORT_GEMINI_MODEL" 'grep -q "\[gemini-gem-9\] saw backend=gemini .* gem=gem-9" "$T/e2b"'
 
 # 3. grammar errors: nothing runs, exit 2
-for bad in 'codex,bogus' 'codex,codex' 'gemini:a:b' 'pi::m' 'codex:a:b' ', ,' "codex:$(printf 'x\033[2J')"; do
+for bad in 'codex,bogus' 'codex,codex' 'gemini:a:b' 'pi::m' 'codex:a:b' ', ,' "codex:$(printf 'x\033[2J')" 'codex:' 'codex,codex:gpt-5.6-sol' 'pi,pi:openai-codex' 'pi:google-vertex,pi:google-vertex:default'; do
   D="$T/r3"; rm -rf "$D"
   CONSORT_REVIEWERS="$bad" CONSORT_PANEL_DIR="$D" bash "$PANEL" >/dev/null 2>"$T/e3"; rc=$?
   check "bad spec '$(printf '%q' "$bad")' -> exit 2, nothing ran" '[ "$rc" -eq 2 ] && ! ls "$D"/*/*.json >/dev/null 2>&1' "rc=$rc $(cat "$T/e3")"
@@ -71,6 +77,11 @@ check "symlink CONSORT_PANEL_DIR refused" '[ "$rc" -eq 2 ] && grep -q "must be a
 mkdir -p "$T/ww"; chmod o+w "$T/ww"
 CONSORT_REVIEWERS=codex CONSORT_PANEL_DIR="$T/ww" bash "$PANEL" >/dev/null 2>"$T/e3e"; rc=$?
 check "world-writable CONSORT_PANEL_DIR refused" '[ "$rc" -eq 2 ] && grep -q "world-writable" "$T/e3e"' "rc=$rc"
+mkdir -p "$T/gw"; chmod g+w "$T/gw"
+CONSORT_REVIEWERS=codex CONSORT_PANEL_DIR="$T/gw" bash "$PANEL" >/dev/null 2>"$T/e3f"; rc=$?
+check "group-writable CONSORT_PANEL_DIR refused" '[ "$rc" -eq 2 ]' "rc=$rc"
+CONSORT_REVIEWERS=codex CONSORT_PANEL_DIR="$T/r3g" bash "$PANEL" >"$T/o3g" 2>/dev/null
+check "run dir created 0700" '[ "$(stat -f %Lp "$(run_dir "$T/o3g")" 2>/dev/null || stat -c %a "$(run_dir "$T/o3g")")" = 700 ]'
 
 # 4. one leg fails -> panel exit 3, the other leg's result stays, failed leg's file is empty
 STUB_FAIL='pi:google-vertex' CONSORT_REVIEWERS='codex,pi:google-vertex' CONSORT_PANEL_DIR="$T/r4" bash "$PANEL" >"$T/o4" 2>"$T/e4"; rc=$?
@@ -102,6 +113,19 @@ check "timeout status" '[ "$(manifest_field "$D/panel.json" pi-google-vertex sta
 check "timeout fired near the cap, not after the sleep" '[ "$el" -lt 20 ]' "took ${el}s"
 check "other leg still ok" '[ "$(manifest_field "$D/panel.json" codex status)" = ok ]'
 check "hung leg process is gone" '[ -s "$T/sleeper.pid" ] && ! kill -0 "$(cat "$T/sleeper.pid")" 2>/dev/null'
+
+# 7b. a leg whose leader is killed from outside: failed at once, its group swept, no 30 min wait
+start=$(date +%s)
+( sleep 2; kill -KILL "$(cat "$T/ext.pid.leader")" ) &
+STUB_SLEEP='pi:google-vertex' STUB_SLEEP_PIDFILE="$T/ext.pid" CONSORT_PANEL_TIMEOUT=60 CONSORT_REVIEWERS='pi:google-vertex' CONSORT_PANEL_DIR="$T/r7b" bash "$PANEL" >"$T/o7b" 2>"$T/e7b"; rc=$?
+el=$(( $(date +%s) - start ))
+check "externally killed leg -> failed quickly" '[ "$rc" -eq 3 ] && [ "$el" -lt 20 ] && [ "$(manifest_field "$T/o7b" pi-google-vertex status)" = failed ]' "rc=$rc el=${el}s $(cat "$T/e7b")"
+check "externally killed leg: stub process swept" '[ -s "$T/ext.pid" ] && ! kill -0 "$(cat "$T/ext.pid")" 2>/dev/null'
+
+# 7c. HUP to the panel kills the legs
+STUB_SLEEP='pi:google-vertex' STUB_SLEEP_PIDFILE="$T/hup.pid" CONSORT_PANEL_TIMEOUT=60 CONSORT_REVIEWERS='pi:google-vertex' CONSORT_PANEL_DIR="$T/r7c" bash "$PANEL" >/dev/null 2>"$T/e7c" &
+pp=$!; sleep 2; kill -HUP "$pp"; wait "$pp" 2>/dev/null; rc=$?; sleep 1
+check "HUP -> exit 130 and legs killed" '[ "$rc" -eq 130 ] && [ -s "$T/hup.pid" ] && ! kill -0 "$(cat "$T/hup.pid")" 2>/dev/null' "rc=$rc $(cat "$T/e7c")"
 
 # 8. a reused parent: previous run's files are untouched, each run has its own dir
 P="$T/r8"; CONSORT_REVIEWERS='codex' CONSORT_PANEL_DIR="$P" bash "$PANEL" >"$T/o8a" 2>/dev/null

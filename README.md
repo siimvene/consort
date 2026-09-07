@@ -153,13 +153,15 @@ It reads `CONSORT_REVIEWERS` (comma-separated legs, default `codex`), runs
 `consort-review.sh` once per leg in parallel, each under its own backend env,
 and writes one findings file per leg into a fresh, exclusively created
 subdirectory of `CONSORT_PANEL_DIR` (default: a temp dir; the manifest's `dir`
-names the run's own directory, so concurrent panels sharing a parent never
-touch each other's files, and the parent must be a directory you own, not a
-symlink, not world-writable). Leg grammar: `codex[:model]`, `gemini[:model]`,
+names the run's own directory, created 0700, so concurrent panels sharing a
+parent never touch each other's files; the parent must be a directory you
+own, not a symlink, not group- or world-writable). Leg grammar: `codex[:model]`, `gemini[:model]`,
 `pi[:provider[:model]]` — so `codex,pi:google-vertex` is the Codex CLI plus
 Gemini 3.1 Pro through Pi, and `codex,gemini,pi:openai-codex:gpt-5.6-sol`
 is three legs. A leg that pins a provider but no model unsets any ambient
-`CONSORT_PI_MODEL`, so the provider's own default applies.
+`CONSORT_PI_MODEL`, so the provider's own default applies. Two legs that
+resolve to the same backend and model are refused: one reviewer run twice
+would present its own findings as agreement.
 
 The manifest on stdout (`{"dir","exit","legs":[{label,spec,backend,model,
 status,exit,seconds,file}]}`) says what each leg did; every leg's stderr is
@@ -170,12 +172,15 @@ is killed) makes the panel exit 3 with that leg's file empty — the other legs'
 results stay on disk, but the panel you configured did not run, and the
 gate's rule is hard-fail, never degrade. An all-excluded diff propagates as
 exit 4: nothing was model-reviewed, so do not merge those files as if they
-were readings. Interrupting the panel kills every leg's process group (TERM,
-then KILL), so no reviewer keeps billing behind a dead wrapper.
+were readings. Interrupting the panel, or losing its terminal (HUP), kills
+every leg's process group (TERM, then KILL if the group still exists), so no
+reviewer keeps billing behind a dead wrapper; a leg whose leader dies from
+outside is failed and its group swept the same way.
 
 `merge-findings.mjs` takes any number of files (`<yours.json> <leg.json>...`,
 labels from the basenames or `label=path`) and clusters findings across all
-of them by file and line proximity: **caught by more than one reviewer**
+of them by file and line proximity (a cluster's whole span stays within the
+proximity, so three findings ten lines apart are not chained into one): **caught by more than one reviewer**
 first (tagged `[claude+codex+pi-google-vertex]`), then each reviewer's
 **only** section — the second-opinion payoff — then the principal's. A file
 that is missing, empty or not a findings array is reported as **NO RESULT**
@@ -294,9 +299,12 @@ file or the backend refuses to start rather than fall through to whatever
 ADC the shell holds). That is how a machine whose user ADC is an
 hourly-expiring workforce token keeps a Gemini leg alive from static config.
 The key file is accepted for read-only runs only, where the fence refuses
-bash and any read outside the workdir; a workspace-write run refuses it,
+bash and any read outside the workdir — and never from inside the workdir,
+where the fence would let the reviewer read it; a workspace-write run refuses
+any key file (consort-scoped or ambient `GOOGLE_APPLICATION_CREDENTIALS`),
 because an unfenced shell one repo-injected `cat` away from a long-lived key
-is not a trust boundary. A run whose final message stopped at the output
+is not a trust boundary. Capture files (`CONSORT_PI_STDERR`, `CONSORT_PI_RAW`)
+must be regular files you own, never symlinks, and are made owner-only. A run whose final message stopped at the output
 token limit is discarded as truncated, not parsed as a partial result.
 `CONSORT_PI_STDERR` captures Pi's stderr and `CONSORT_PI_RAW` its raw
 `--mode json` event stream (both owner-only) — the evidence to open when a

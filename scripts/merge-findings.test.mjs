@@ -68,6 +68,14 @@ const section = (out, title) => {
   expect('3-way: claude only', (section(r.stdout, 'claude only (1)') ?? '').includes('z.py:1'));
   expect('3-way: reviewer-only sections come before principal-only', r.stdout.indexOf('### codex only') < r.stdout.indexOf('### claude only'));
 }
+// 3b. no chaining: 10, 15, 20 across three reviewers are two clusters, not one
+{
+  const c = write('claude.json', [F('a.py', 10, 'low', 'A')]);
+  const x = write('codex.json', [F('a.py', 15, 'low', 'B')]);
+  const p = write('pi.json', [F('a.py', 20, 'low', 'C')]);
+  const r = run(c, x, p);
+  expect('span rule stops chaining', r.stdout.includes('Caught by more than one reviewer (1)') && r.stdout.includes('### pi only (1)'));
+}
 // 4. label=path syntax
 {
   const c = write('mine.json', [F('a.py', 1, 'low', 'A')]);

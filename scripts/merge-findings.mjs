@@ -58,10 +58,12 @@ const rank = { critical: 0, high: 1, medium: 2, low: 3 };
 const sevRank = (f) => rank[sev(f)] ?? 9;
 
 // Greedy clustering across all sets, in argument order. A finding joins the
-// first cluster in the same file with a member within PROXIMITY lines that
-// has no member from its own set yet (two findings from one reviewer are two
-// findings, never one). Bucketing by line would split findings that straddle
-// a bucket boundary (e.g. line 42 vs 44), so the match is pairwise.
+// first cluster in the same file whose full line span, with the new member
+// included, stays within PROXIMITY, and that has no member from its own set
+// yet (two findings from one reviewer are two findings, never one). The span
+// rule stops chaining: lines 10, 15 and 20 are two clusters, not one that
+// spans twice the proximity. Bucketing by line would split findings that
+// straddle a bucket boundary (e.g. line 42 vs 44), so the match is pairwise.
 const clusters = [];
 for (const s of sets) {
   for (const f of s.findings ?? []) {
@@ -69,9 +71,9 @@ for (const s of sets) {
     const c = clusters.find((cl) =>
       !cl.sources.has(s.label) &&
       cl.file === norm(f.file) &&
-      cl.members.some((m) => Math.abs((Number(m.f.line) || 0) - line) <= PROXIMITY));
-    if (c) { c.sources.add(s.label); c.members.push({ src: s.label, f }); }
-    else clusters.push({ file: norm(f.file), sources: new Set([s.label]), members: [{ src: s.label, f }] });
+      Math.max(cl.max, line) - Math.min(cl.min, line) <= PROXIMITY);
+    if (c) { c.sources.add(s.label); c.members.push({ src: s.label, f }); c.min = Math.min(c.min, line); c.max = Math.max(c.max, line); }
+    else clusters.push({ file: norm(f.file), sources: new Set([s.label]), members: [{ src: s.label, f }], min: line, max: line });
   }
 }
 // Representative = the most severe member (ties: earliest set); tags list

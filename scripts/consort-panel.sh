@@ -70,6 +70,7 @@ for raw in ${RAW[@]+"${RAW[@]}"}; do
   spec="$(printf '%s' "$raw" | tr -d '[:space:]')"
   [ -n "$spec" ] || continue
   case "$spec" in *[[:cntrl:]]*) echo "consort-panel: leg spec contains control characters" >&2; exit 2 ;; esac
+  case "$spec" in *::*|*:) echo "consort-panel: bad leg '$spec' (empty field)" >&2; exit 2 ;; esac
   IFS=':' read -r backend a b extra <<< "$spec"
   if [ -n "${extra:-}" ]; then
     echo "consort-panel: bad leg '$spec' (too many ':' fields)" >&2; exit 2
@@ -114,8 +115,8 @@ if [ -n "$PARENT" ]; then
   if [ -L "$PARENT" ] || [ ! -d "$PARENT" ] || [ ! -O "$PARENT" ]; then
     echo "consort-panel: CONSORT_PANEL_DIR must be a directory you own (not a symlink): $PARENT" >&2; exit 2
   fi
-  if [ -n "$(find "$PARENT" -maxdepth 0 -perm -o+w 2>/dev/null)" ]; then
-    echo "consort-panel: CONSORT_PANEL_DIR is world-writable, refusing: $PARENT" >&2; exit 2
+  if [ -n "$(find "$PARENT" -maxdepth 0 \( -perm -g+w -o -perm -o+w \) 2>/dev/null)" ]; then
+    echo "consort-panel: CONSORT_PANEL_DIR is group- or world-writable, refusing: $PARENT" >&2; exit 2
   fi
   PARENT="$(cd "$PARENT" && pwd -P)"
 else
@@ -124,7 +125,7 @@ fi
 # One fresh, exclusively created directory per run: no stale leg file, no
 # stale manifest, no two concurrent panels writing the same names.
 DIR="$PARENT/panel-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-n=0; while ! mkdir "$DIR" 2>/dev/null; do
+n=0; while ! mkdir -m 700 "$DIR" 2>/dev/null; do
   n=$((n+1)); [ "$n" -lt 100 ] || { echo "consort-panel: cannot create a run directory under $PARENT" >&2; exit 2; }
   DIR="$PARENT/panel-$(date -u +%Y%m%dT%H%M%SZ)-$$-$n"
 done
@@ -136,16 +137,6 @@ done
 # call. Bash prints no job notices in a non-interactive shell.
 set -m
 PIDS=(); MODELS=(); STARTS=()
-# Cleanup is armed BEFORE the first leg starts, and a leg that shrugs off
-# TERM gets KILL a second later: a wrapper must never exit leaving a
-# still-billing reviewer behind it.
-kill_all() {
-  local p
-  for p in ${PIDS[@]+"${PIDS[@]}"}; do [ -n "$p" ] && kill -TERM -- "-$p" 2>/dev/null; done
-  sleep 1
-  for p in ${PIDS[@]+"${PIDS[@]}"}; do [ -n "$p" ] && kill -KILL -- "-$p" 2>/dev/null; done
-}
-trap 'kill_all; echo "consort-panel: interrupted, legs killed" >&2; exit 130' INT TERM
 leg_env_run() {  # <index> <command...> — runs a command under leg i's env
   local i="$1"; shift
   local -a e u
@@ -153,10 +144,38 @@ leg_env_run() {  # <index> <command...> — runs a command under leg i's env
   IFS=$'\n' read -r -d '' -a u <<< "${UNSETS[$i]}" || true
   env ${u[@]+"${u[@]}"} "${e[@]}" "$@"
 }
+# Resolve every leg's model the way the leg itself will (for the manifest),
+# and refuse two legs that resolve to the same backend + model: the same
+# reviewer run twice would present its own findings as independent agreement.
+for i in "${!LABELS[@]}"; do
+  MODELS+=("$(leg_env_run "$i" bash -c '. "$1/scripts/consort-backend.sh" 2>/dev/null; consort_impl_model 2>/dev/null' _ "$ROOT" || true)")
+  for j in "${!MODELS[@]}"; do
+    [ "$j" -lt "$i" ] || continue
+    if [ "${BACKENDS[$j]}|${MODELS[$j]}" = "${BACKENDS[$i]}|${MODELS[$i]}" ]; then
+      echo "consort-panel: legs '${SPECS[$j]}' and '${SPECS[$i]}' resolve to the same reviewer (${BACKENDS[$i]} ${MODELS[$i]:-?})" >&2; exit 2
+    fi
+  done
+done
+
+# Cleanup is armed BEFORE the first leg starts and covers HUP (a dropped
+# terminal or SSH session does not reach the legs' own process groups) and
+# EXIT; a group that shrugs off TERM gets KILL a second later, but only
+# while it still exists — a pgid can be recycled, and a blind KILL would hit
+# whoever got it. A wrapper must never exit leaving a still-billing reviewer.
+stop_groups() {  # <pid>... — TERM, grace, KILL-if-still-there
+  local p; [ "$#" -gt 0 ] || return 0
+  for p in "$@"; do kill -TERM -- "-$p" 2>/dev/null; done
+  sleep 1
+  for p in "$@"; do kill -0 -- "-$p" 2>/dev/null && kill -KILL -- "-$p" 2>/dev/null; done
+  for p in "$@"; do wait "$p" 2>/dev/null; done
+}
+live_pids() { local p; for p in ${PIDS[@]+"${PIDS[@]}"}; do [ -n "$p" ] && printf '%s\n' "$p"; done; }
+on_signal() { stop_groups $(live_pids); echo "consort-panel: interrupted, legs killed" >&2; trap - EXIT; exit 130; }
+on_exit()   { stop_groups $(live_pids); }
+trap on_signal INT TERM HUP
+trap on_exit EXIT
 for i in "${!LABELS[@]}"; do
   l="${LABELS[$i]}"
-  # Resolve the model string the way the leg itself will, for the manifest.
-  MODELS+=("$(leg_env_run "$i" bash -c '. "$1/scripts/consort-backend.sh" 2>/dev/null; consort_impl_model 2>/dev/null' _ "$ROOT" || true)")
   # Start stamps stay in memory: a value read back from a file would be
   # substituted into $(( )) below, and bash expands array subscripts there —
   # file bytes like a[$(cmd)] would run cmd.
@@ -171,37 +190,45 @@ done
 
 # ---- wait, enforcing the per-leg cap ----------------------------------------
 # A reaped pid is cleared from PIDS at once: a recycled pid would otherwise
-# make kill_all signal some unrelated process group of the same user.
+# make the cleanup signal some unrelated process group of the same user.
+# Legs that expire together are stopped together (one grace period, not one
+# per leg), so the last of N hung legs does not overrun its cap by N seconds.
 while :; do
-  pending=0; now="$(date +%s)"
+  pending=0; now="$(date +%s)"; expired=()
   for i in "${!LABELS[@]}"; do
     l="${LABELS[$i]}"; p="${PIDS[$i]}"
     [ -n "$p" ] || continue
     if [ -f "$DIR/$l.exit" ]; then wait "$p" 2>/dev/null; PIDS[$i]=""; continue; fi
     if kill -0 "$p" 2>/dev/null; then
-      if [ "$TIMEOUT" -gt 0 ] && [ $(( now - STARTS[i] )) -ge "$TIMEOUT" ]; then
-        kill -TERM -- "-$p" 2>/dev/null; sleep 1; kill -KILL -- "-$p" 2>/dev/null
-        wait "$p" 2>/dev/null
-        if kill -0 -- "-$p" 2>/dev/null; then
-          echo "consort-panel: [$l] process group $p survived TERM+KILL — it may still be running (and billing); check it by hand" >&2
-        fi
-        PIDS[$i]=""
-        [ -f "$DIR/$l.exit" ] || echo 124 > "$DIR/$l.exit" 2>/dev/null
-        echo "consort-panel: [$l] killed after ${TIMEOUT}s (CONSORT_PANEL_TIMEOUT)" >&2
-      else
-        pending=1
-      fi
+      if [ "$TIMEOUT" -gt 0 ] && [ $(( now - STARTS[i] )) -ge "$TIMEOUT" ]; then expired+=("$i"); else pending=1; fi
     else
-      # Process gone without writing an exit file (killed from outside): failed.
+      # The leg's leader died without writing an exit file (killed from
+      # outside, OOM): failed — and its group (the backend CLI it spawned)
+      # may still be running, so sweep it too.
       wait "$p" 2>/dev/null; PIDS[$i]=""
+      kill -0 -- "-$p" 2>/dev/null && stop_groups "$p"
       [ -f "$DIR/$l.exit" ] || echo 143 > "$DIR/$l.exit" 2>/dev/null
+      echo "consort-panel: [$l] died without a result (killed from outside?)" >&2
     fi
   done
+  if [ "${#expired[@]}" -gt 0 ]; then
+    pids=(); for i in "${expired[@]}"; do pids+=("${PIDS[$i]}"); done
+    stop_groups "${pids[@]}"
+    for i in "${expired[@]}"; do
+      l="${LABELS[$i]}"; p="${PIDS[$i]}"; PIDS[$i]=""
+      if kill -0 -- "-$p" 2>/dev/null; then
+        echo "consort-panel: [$l] process group $p survived TERM+KILL — it may still be running (and billing); check it by hand" >&2
+      fi
+      [ -f "$DIR/$l.exit" ] || echo 124 > "$DIR/$l.exit" 2>/dev/null
+      echo "consort-panel: [$l] killed after ${TIMEOUT}s (CONSORT_PANEL_TIMEOUT)" >&2
+    done
+  fi
   [ "$pending" -eq 1 ] || break
   sleep 2
 done
 for p in ${PIDS[@]+"${PIDS[@]}"}; do [ -n "$p" ] && wait "$p" 2>/dev/null; done
-trap - INT TERM
+PIDS=()
+trap - INT TERM HUP EXIT
 
 # ---- report -----------------------------------------------------------------
 rc=0; any_excluded=0; LEGARGS=()

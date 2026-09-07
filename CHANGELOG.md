@@ -73,7 +73,17 @@ still in 0.x.
   shell must not have a long-lived key in its environment), a run whose
   final message stopped at the output token limit is discarded as truncated,
   the JSON extractor says why it found no result, and `CONSORT_PI_RAW`
-  captures the raw event stream as evidence. Deferred, pre-existing: a
+  captures the raw event stream as evidence. Second gate round (Codex + Gemini
+  via Pi on the hardened diff): group-writable parents refused and run
+  directories created 0700, legs resolving to the same backend+model refused
+  (one reviewer twice is not agreement), empty spec fields rejected, HUP and
+  EXIT covered by the cleanup with KILL sent only to a group that still
+  exists, expired legs stopped together, a leg whose leader dies from outside
+  has its group swept, the merge no longer chains clusters past the
+  proximity, a Google key file inside the workdir is refused (the fence would
+  let the reviewer read it), the workspace-write refusal covers the ambient
+  `GOOGLE_APPLICATION_CREDENTIALS` too, and `CONSORT_PI_STDERR`/`CONSORT_PI_RAW`
+  must be owned regular files (made owner-only; symlinks refused). Deferred, pre-existing: a
   repo-local `.claude/rules/` is auto-injected into every reviewer's prompt
   (0.4.0 design), which a hostile repo could use to talk every leg into an
   empty result at once — opt-in or fencing is tracked as follow-up.

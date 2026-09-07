@@ -95,6 +95,23 @@ _consort_pi_model() {
   esac
 }
 _consort_pi_thinking() { echo "${CONSORT_PI_THINKING:-high}"; }
+# Resolve a capture-file setting to an absolute path that is safe to append
+# to, or fail. Prints /dev/null when unset. An existing path must be a regular
+# file we own, never a symlink (a hostile checkout could plant one at a
+# relative name; tee and >> both follow symlinks), and is made owner-only —
+# the stream holds the prompt, the diff and the model's output; the umask
+# only ever protected a file we created ourselves.
+_consort_pi_private_file() {
+  local f="$1" name="$2"
+  [ -n "$f" ] || { echo /dev/null; return 0; }
+  case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
+  if [ -L "$f" ] || { [ -e "$f" ] && { [ ! -f "$f" ] || [ ! -O "$f" ]; }; }; then
+    echo "consort: $name must be a regular file you own (not a symlink): $f" >&2; return 1
+  fi
+  [ -e "$f" ] || ( umask 077; : > "$f" ) || { echo "consort: cannot create $name: $f" >&2; return 1; }
+  chmod 600 "$f" 2>/dev/null || { echo "consort: cannot make $name owner-only: $f" >&2; return 1; }
+  echo "$f"
+}
 # Absolute, resolved against the CALLER's cwd: the runner cd's into the
 # workdir before exporting it, and a relative path re-resolved there could
 # name a repository-controlled file.
@@ -305,11 +322,9 @@ _consort_pi_run() {
   # Create it owner-only, then run Pi under the user's own umask: a umask
   # around the whole process would also make every file the implementer
   # writes 0600.
-  local errf="${CONSORT_PI_STDERR:-/dev/null}" rawf="${CONSORT_PI_RAW:-/dev/null}"
-  case "$errf" in /*) ;; *) errf="$PWD/$errf" ;; esac
-  case "$rawf" in /*) ;; *) rawf="$PWD/$rawf" ;; esac
-  [ "$errf" = /dev/null ] || ( umask 077; : >> "$errf" ) || return 1
-  [ "$rawf" = /dev/null ] || ( umask 077; : >> "$rawf" ) || return 1
+  local errf rawf
+  errf="$(_consort_pi_private_file "${CONSORT_PI_STDERR:-}" CONSORT_PI_STDERR)" || return 1
+  rawf="$(_consort_pi_private_file "${CONSORT_PI_RAW:-}" CONSORT_PI_RAW)" || return 1
   local creds; creds="$(_consort_pi_gcp_credentials)"
   (
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
@@ -358,6 +373,21 @@ consort_pi_call() {
   # Absolute, symlink-free: the fence anchors on this string from inside the
   # workdir, where a relative path would resolve to the wrong place.
   workdir="$(cd "$workdir" && pwd -P)" || { : > "$out"; return 0; }
+  # A credential file INSIDE the workdir is readable through the fence (the
+  # fence allows the workdir) — a repo rule could have the reviewer read the
+  # key and send it to the provider. Refuse it in every mode; both the
+  # consort-scoped and the ambient Google variable are checked.
+  case "$p" in google*)
+    local cf cfr
+    for cf in "$(_consort_pi_gcp_credentials)" "${GOOGLE_APPLICATION_CREDENTIALS:-}"; do
+      [ -n "$cf" ] || continue
+      cfr="$(cd "$(dirname "$cf")" 2>/dev/null && pwd -P)/$(basename "$cf")" || cfr="$cf"
+      case "$cfr" in "$workdir"|"$workdir"/*)
+        echo "consort: refusing a Google credentials file inside the workdir ($cf): the reviewer could read it" >&2
+        : > "$out"; return 0 ;;
+      esac
+    done ;;
+  esac
 
   local flags=(--provider "$p" --model "$m" --thinking "$(_consort_pi_thinking)")
   case "$mode" in
@@ -377,8 +407,8 @@ consort_pi_call() {
       # the model's output. Read-only is fine (the fence refuses bash and any
       # read outside the workdir); here, use ADC or a short-lived token.
       case "$p" in google*)
-        if [ -n "${CONSORT_GCP_CREDENTIALS:-}" ]; then
-          echo "consort: refusing CONSORT_GCP_CREDENTIALS (a key file) for a workspace-write pi run — bash is unfenced there; unset it and use ADC / a short-lived token for delegation" >&2
+        if [ -n "${CONSORT_GCP_CREDENTIALS:-}" ] || [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+          echo "consort: refusing a credentials key file (CONSORT_GCP_CREDENTIALS / GOOGLE_APPLICATION_CREDENTIALS) for a workspace-write pi run — bash is unfenced there; unset both and use ADC / a short-lived token for delegation" >&2
           : > "$out"; return 0
         fi ;;
       esac
