@@ -137,6 +137,43 @@ const section = (out, title) => {
   const both = section(r.stdout, 'Caught by more than one reviewer (1)');
   expect('naming beats proximity', !!both && both.includes('deploy/install_timers.sh:16') && (section(r.stdout, 'principal only (1)') ?? '').includes('deploy/unit.timer:1 — syntax error'));
 }
+// 3d2. round-two gate cases
+{
+  const c = write('claude.json', []);
+  // full repo-relative path in the title, deeper than two segments
+  const x = write('codex.json', [F('src/deploy/install_timers.sh', 16, 'medium', 'stale units are not retired')]);
+  const p = write('pi.json', [F('src/deploy/unit.timer', 1, 'low', 'src/deploy/install_timers.sh does not retire this unit')]);
+  expect('full path in title matches', run(c, x, p).stdout.includes('Caught by more than one reviewer (1)'));
+  // trailing sentence punctuation after the file name
+  const p2 = write('pi2.json', [F('src/deploy/unit.timer', 1, 'low', 'This unit is never retired by install_timers.sh.')]);
+  expect('trailing period does not break the match', run(c, x, p2).stdout.includes('Caught by more than one reviewer (1)'));
+  // a bare basename shared by two different paths names nothing
+  const x3 = write('codex3.json', [F('skills/consort/SKILL.md', 5, 'low', 'lifecycle step 5 is stale')]);
+  const p3 = write('pi3.json', [F('skills/review/SKILL.md', 90, 'low', 'SKILL.md step 8 omits the scanner section')]);
+  expect('ambiguous bare basename does not link', run(c, x3, p3).stdout.includes('Caught by more than one reviewer (0)'));
+  const p3b = write('pi3b.json', [F('skills/review/SKILL.md', 90, 'low', 'skills/consort/SKILL.md step 5 contradicts this')]);
+  expect('ambiguous basename with a path segment still links', run(c, x3, p3b).stdout.includes('Caught by more than one reviewer (1)'));
+  // non-disjoint candidates: deterministic whatever the argument order
+  const A = write('A.json', [F('src/alpha-long.js', 1, 'low', 'a1'), F('src/beta-long.js', 1, 'low', 'a2')]);
+  const B = write('B.json', [F('src/gamma-long.js', 1, 'low', 'b1')]);
+  const C = write('C.json', [F('src/other.js', 1, 'high', 'alpha-long.js, beta-long.js and gamma-long.js all repeat this')]);
+  const o1 = run(c, A, B, C).stdout, o2 = run(c, B, A, C).stdout, o3 = run(c, C, B, A).stdout;
+  const agreed = (o) => (section(o, 'Caught by more than one reviewer (1)') ?? '');
+  expect('non-disjoint candidates: A,B,C and B,A,C agree on the same cluster', agreed(o1).includes('src/alpha-long.js:1') && agreed(o1).includes('src/gamma-long.js:1') && agreed(o2).includes('src/alpha-long.js:1') && agreed(o2).includes('src/gamma-long.js:1'));
+  expect('non-disjoint candidates: C first gives the same cluster', agreed(o3).includes('src/alpha-long.js:1') && agreed(o3).includes('src/gamma-long.js:1'));
+  // merging near clusters never exceeds the span
+  const s1 = write('s1.json', [F('a.py', 1, 'low', 'x')]);
+  const s2 = write('s2.json', [F('a.py', 11, 'low', 'y')]);
+  const s3 = write('s3.json', [F('a.py', 6, 'low', 'z')]);
+  const rb = run(c, s1, s2, s3).stdout;
+  expect('bridge finding does not merge clusters past the span', rb.includes('Caught by more than one reviewer (1)') && rb.includes('### s2 only (1)'));
+  // tie-break after a merge: earliest set wins
+  const t1 = write('t1.json', [F('src/one-long.js', 1, 'high', 'first')]);
+  const t2 = write('t2.json', [F('src/two-long.js', 1, 'high', 'second')]);
+  const t3 = write('t3.json', [F('src/three-long.js', 1, 'low', 'src/one-long.js and src/two-long.js')]);
+  const rt = run(c, t2, t1, t3).stdout;
+  expect('tie-break after merge: earliest set is the representative', (section(rt, 'Caught by more than one reviewer (1)') ?? '').includes('  [high] src/two-long.js:1 — second'));
+}
 // 3e. more than MAX_FINDINGS in one set: merged up to the cap, loud on stderr
 {
   const c = write('claude.json', []);

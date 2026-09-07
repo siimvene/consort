@@ -181,9 +181,11 @@ outside is failed and its group swept the same way.
 labels from the basenames or `label=path`) and clusters findings across all
 of them by file and line proximity (a cluster's whole span stays within the
 proximity, so three findings ten lines apart are not chained into one), and
-across files when one finding's title names the other's file as a whole path
-token — two reviewers anchoring one defect on the failing script and on the
-deleted unit file are one finding, tagged `cross-file`. A cluster prints its
+across files when one finding's title names the other's file as a whole-segment
+path suffix (`tasks/run.py` names `src/kvart/tasks/run.py`; `subtasks/run.py`
+does not; a bare basename shared by two paths in the merge names nothing) —
+two reviewers anchoring one defect on the failing script and on the deleted
+unit file are one finding, tagged `cross-file`. A cluster prints its
 most severe member first and every other member under it, so nothing a
 reviewer wrote is ever folded away; a finding that links two clusters merges
 them, so the result does not depend on argument order: **caught by more than one reviewer**

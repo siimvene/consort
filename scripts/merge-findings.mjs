@@ -69,64 +69,58 @@ const pathKey = (s) => clean(s).toLowerCase().replace(/^\.\//, '').replace(/\/+/
 // finding's file. Titles are short and deliberate, so a file named there is
 // the subject, not a passing mention; the detail is not used because it
 // routinely lists neighbours. The file field is reviewer output, not a
-// verified path, so a key must look like a file (an extension, or a path
-// with a slash), be at least MIN_KEY characters, and match the title as a
-// whole path token (subtasks/run.py does not name tasks/run.py; a bare
-// one-word "file" like "authorization" is not a key at all). Word overlap
-// was tried and rejected: the real case shared one content word.
+// verified path, so the match is strict: path-like tokens are extracted from
+// the title (trailing sentence punctuation dropped), and a token names a
+// file only if it is a whole-segment SUFFIX of that file's path
+// (`tasks/run.py` names `src/kvart/tasks/run.py`; `subtasks/run.py` and a
+// one-word "file" such as `authorization` do not), looks like a file (an
+// extension or a slash) and is at least MIN_KEY characters. A bare basename
+// (no slash) is ambiguous when two different paths in the merge share it
+// (`SKILL.md` under two skills), and then names nothing. Word overlap was
+// tried and rejected: the real case shared one content word.
 const MIN_KEY = 8;
 const TITLE_MAX = 400; // matching looks at the head of a title; a reviewer that needs more is not writing a title
-const fileKeys = (file) => {
-  const parts = pathKey(file).split('/').filter(Boolean);
-  const base = parts[parts.length - 1] ?? '';
-  const keys = [];
-  if (parts.length >= 2) keys.push(parts.slice(-2).join('/'));
-  if (/\.[a-z0-9]+$/.test(base)) keys.push(base);
-  return keys.filter((k) => k.length >= MIN_KEY);
+const titleTokens = (f) =>
+  (clean(f.title).toLowerCase().slice(0, TITLE_MAX).match(/[a-z0-9_.@\/-]+/g) ?? [])
+    .map((t) => t.replace(/^[.\/-]+/, '').replace(/[.,;:!?)\]]+$/, ''))
+    .filter((t) => t.length >= MIN_KEY && (t.includes('/') || /\.[a-z0-9]+$/.test(t)));
+const namesFile = (token, file, ambiguousBasenames) => {
+  const pk = pathKey(file);
+  if (!token.includes('/') && ambiguousBasenames.has(token)) return false;
+  return pk === token || pk.endsWith('/' + token);
 };
-const PATH_CHAR = /[a-z0-9_.\/@-]/;
-const titleNamesFile = (f, otherFile) => {
-  const t = clean(f.title).toLowerCase().slice(0, TITLE_MAX);
-  return fileKeys(otherFile).some((k) => {
-    let i = t.indexOf(k);
-    while (i >= 0) {
-      const before = i === 0 ? '' : t[i - 1];
-      const after = t[i + k.length] ?? '';
-      if (!PATH_CHAR.test(before) && !PATH_CHAR.test(after)) return true;
-      i = t.indexOf(k, i + 1);
-    }
-    return false;
-  });
-};
-const sameDefectAcrossFiles = (a, b) =>
-  pathKey(a.file) !== pathKey(b.file) && (titleNamesFile(a, b.file) || titleNamesFile(b, a.file));
+const sameDefectAcrossFiles = (a, b, amb) =>
+  pathKey(a.file) !== pathKey(b.file) &&
+  (titleTokens(a).some((t) => namesFile(t, b.file, amb)) || titleTokens(b).some((t) => namesFile(t, a.file, amb)));
 
-// Clustering across all sets, in argument order, order-independent in
-// result: a finding is compared with every existing cluster that has no
-// member from its own set (two findings from one reviewer are two findings,
-// never one) and joins EVERY cluster it relates to — (a) same file, with the
-// full line span within PROXIMITY (the span rule stops chaining: lines 10,
-// 15 and 20 are two clusters, not one spanning twice the proximity;
-// bucketing by line would split findings that straddle a boundary, so the
-// match is pairwise), or (b) cross-file, one title naming the other's file.
-// Clusters it links that do not share a reviewer are merged through it, so
-// A(a.py), B(b.py) and C(a.py, titled "b.py") are one cluster whatever the
-// argument order. If two candidate clusters already share a reviewer they
-// cannot be merged; the finding then goes to the one it names explicitly
-// (cross-file, deliberate) ahead of the one it merely sits near.
+// Clustering across all sets, in argument order. A finding is compared with
+// every existing cluster that has no member from its own set (two findings
+// from one reviewer are two findings, never one) and relates to a cluster
+// by (a) proximity — same file, full line span within PROXIMITY, including
+// after any merge (the span rule stops chaining: lines 10, 15 and 20 are two
+// clusters, not one spanning twice the proximity; bucketing by line would
+// split findings that straddle a boundary, so the match is pairwise) — or
+// (b) cross-file, one title naming the other's file. It joins the largest
+// compatible set of related clusters, explicitly named ones first, then
+// near ones, skipping any that would repeat a reviewer or break the span,
+// and those clusters merge through it. So A(a.py), B(b.py) and C(a.py,
+// titled "b.py") are one cluster whatever the argument order. What stays
+// greedy, by construction: when one finding relates to two findings of the
+// SAME reviewer it can join only one (the earlier), and proximity grouping
+// within a file depends on the order findings arrive in.
 const MAX_FINDINGS = 500; // per set; a leg that returns more is not reviewing
 const clusters = [];
+const linesIn = (members, file) => members.filter((m) => pathKey(m.f.file) === file).map((m) => Number(m.f.line) || 0);
+const spanOk = (lines) => lines.length === 0 || Math.max(...lines) - Math.min(...lines) <= PROXIMITY;
 const sameFileNear = (cl, f, line) => {
-  const same = cl.members.filter((m) => pathKey(m.f.file) === pathKey(f.file));
-  if (!same.length) return false;
-  const lines = same.map((m) => Number(m.f.line) || 0);
-  return Math.max(...lines, line) - Math.min(...lines, line) <= PROXIMITY;
+  const lines = linesIn(cl.members, pathKey(f.file));
+  return lines.length > 0 && spanOk([...lines, line]);
 };
-const disjointSources = (cls) => {
-  const seen = new Set();
-  for (const cl of cls) for (const src of cl.sources) { if (seen.has(src)) return false; seen.add(src); }
-  return true;
-};
+const allPaths = new Set(sets.flatMap((s) => (s.findings ?? []).slice(0, MAX_FINDINGS).map((f) => pathKey(f.file))));
+const byBasename = new Map();
+for (const pth of allPaths) { const b = pth.split('/').pop(); byBasename.set(b, (byBasename.get(b) ?? 0) + 1); }
+const ambiguousBasenames = new Set([...byBasename].filter(([, n]) => n > 1).map(([b]) => b));
+let order = 0;
 for (const s of sets) {
   const findings = s.findings ?? [];
   if (findings.length > MAX_FINDINGS) {
@@ -134,25 +128,35 @@ for (const s of sets) {
   }
   for (const f of findings.slice(0, MAX_FINDINGS)) {
     const line = Number(f.line) || 0;
-    const near = [], named = [];
+    const member = { src: s.label, f, order: order++ };
+    const named = [], near = [];
     for (const cl of clusters) {
       if (cl.sources.has(s.label)) continue;
-      if (cl.members.some((m) => sameDefectAcrossFiles(m.f, f))) named.push(cl);
+      if (cl.members.some((m) => sameDefectAcrossFiles(m.f, f, ambiguousBasenames))) named.push(cl);
       else if (sameFileNear(cl, f, line)) near.push(cl);
     }
-    let targets = [...named, ...near];
-    if (targets.length > 1 && !disjointSources(targets)) targets = [targets[0]];
-    if (!targets.length) { clusters.push({ sources: new Set([s.label]), members: [{ src: s.label, f }] }); continue; }
-    const [home, ...rest] = targets;
+    // Largest compatible subset, in priority order: no reviewer twice, and
+    // the merged cluster's span in this finding's file within PROXIMITY.
+    const chosen = []; const taken = new Set([s.label]);
+    for (const cl of [...named, ...near]) {
+      if ([...cl.sources].some((src) => taken.has(src))) continue;
+      const merged = [...chosen.flatMap((c) => c.members), ...cl.members, member];
+      if (!spanOk(linesIn(merged, pathKey(f.file)))) continue;
+      chosen.push(cl); for (const src of cl.sources) taken.add(src);
+    }
+    if (!chosen.length) { clusters.push({ sources: new Set([s.label]), members: [member] }); continue; }
+    const [home, ...rest] = chosen;
     for (const other of rest) {
       for (const src of other.sources) home.sources.add(src);
       home.members.push(...other.members);
       clusters.splice(clusters.indexOf(other), 1);
     }
-    home.sources.add(s.label); home.members.push({ src: s.label, f });
+    home.sources.add(s.label); home.members.push(member);
+    home.members.sort((a, b) => a.order - b.order);
   }
 }
-// Representative = the most severe member (ties: earliest set); tags list
+// Representative = the most severe member (ties: the earliest set, then the
+// earliest finding — members keep arrival order through merges); tags list
 // every reviewer that caught it. Every OTHER member is printed under the
 // representative — a cluster never deletes a finding's text from the
 // report, whatever absorbed it — and a cluster spanning more than one file

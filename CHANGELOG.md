@@ -33,6 +33,17 @@ still in 0.x.
   order, and prefers the cluster it names explicitly over the one it merely
   sits near when they cannot merge; reviewer file strings no longer appear
   in the tag; a set is capped at 500 findings with a loud stderr line.
+  Second round (Codex, Gemini via Pi): path tokens are extracted from the
+  title and matched as whole-segment suffixes of the other file's path (a
+  full repo-relative path and a trailing period both work now); a bare
+  basename shared by two different paths in the merge names nothing; a
+  finding joins the largest compatible subset of its candidate clusters
+  (no reviewer twice, span within the proximity even after a merge) rather
+  than only the first, so non-disjoint candidates resolve the same way in
+  any argument order; members keep arrival order through merges so the
+  tie-break "earliest set" holds. Still greedy, by construction and now
+  documented: one finding relating to two findings of the same reviewer
+  joins the earlier; proximity grouping within a file follows arrival order.
 
 ## [0.9.0] — 2026-09-07
 
