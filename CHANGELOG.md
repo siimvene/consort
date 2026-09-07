@@ -5,6 +5,43 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.10.0] — 2026-09-08
+
+### Changed
+- **The principal's review pass runs in a non-inheriting agent, not in the
+  authoring session.** New `agents/code-reviewer` — same shape as the
+  security side-agent: Read/Grep/Glob, no shell, fed the diff file, the pack
+  paths and the test summary, returning findings JSON. It runs the
+  blast-surface sweep with repo access and is the "Claude only" column of
+  the merge. Why: a review pass is 30 to 40 tool calls, and every call
+  re-reads the whole context it runs in. In an authoring session at 200k to
+  400k tokens that pass alone cost more than every other leg combined, and
+  it was the one leg nobody measured — the security side-agent reports ~110k
+  tokens over 19 to 32 calls for its whole pass, the principal's had no
+  boundary to report from. The review skill and `/consort:review` now have
+  the session gather mechanical evidence (diff file, scanners, tests), spawn
+  both agents and the panel in parallel, merge, verify and present; it no
+  longer reads the packs or the diff into its own context.
+
+### Added
+- **`scripts/consort-test.sh [base]`** — blast-surface step 5 as a tool
+  instead of a chore in the session. Runs the suite (`CONSORT_TEST_CMD`, or
+  detected from `test.sh`, `package.json`, pytest markers, `go.mod`,
+  `Cargo.toml`, a Makefile `test:` target) on head and in a detached
+  worktree of the base ref (dependency dirs symlinked so a fresh checkout can
+  start), normalises failure lines across pytest / jest / go / cargo / TAP,
+  and prints ONE summary line plus the new failures (capped,
+  `CONSORT_TEST_MAX_LINES`) and the run directory. Full logs and a
+  `result.json` stay on disk for the code-reviewer agent. Exit 0 nothing
+  new · 1 new failures, or a red head against a green baseline whose
+  failures the parser could not read · 2 did not run (no command, bad ref,
+  head timed out under `CONSORT_TEST_TIMEOUT`) · 3 head ran but the
+  baseline could not — the last two are reported as such, never as green.
+  Run directories are owner-only; `CONSORT_TEST_DIR` gets the panel's
+  ownership and writability checks. Pinned by `consort-test.test.sh` (30
+  checks: baseline diffing, no-baseline mode, log-on-disk output budget, the
+  cap, the crash case, refusals, the parser).
+
 ## [0.9.1] — 2026-09-07
 
 ### Fixed

@@ -25,15 +25,20 @@ looks small.
    retry/rate limits, and documented behavior in README, docs, and command help.
    Documentation that now lies about behavior is a finding.
 
-5. **Test suite** (principal reviewer only; a read-only cross-reviewer states
-   that it could not run tests and defers to the principal's result). Run the
-   project's own test suite. Compare failures against a pre-change baseline on
-   the same machine (some suites have environmental failures); any new failure
-   is a finding. Running tests executes the diff's code: do this only for
-   trusted diffs (your own work, or a contributor branch you have read); for an
-   untrusted diff, run in a sandbox or skip with an explicit note in the review
-   output. "The change is miniature" is not an exemption; miniature lifecycle
-   changes are where this pack earns its keep.
+5. **Test suite** (principal only; a read-only cross-reviewer or a shell-less
+   agent states that it could not run tests and defers to the principal's
+   result). Run the project's own test suite through `consort-test.sh`, which
+   runs head and a worktree of the base ref, keeps both logs on disk, and
+   prints only the summary and the NEW failures — the comparison against a
+   pre-change baseline on the same machine is what separates a regression
+   from an environmental failure, and keeping the logs out of the review
+   session is what keeps the review affordable. Any new failure is a finding;
+   a suite that did not run (exit 2) or ran without a baseline (exit 3) is
+   stated as such in the review output, never omitted. Running tests executes
+   the diff's code: do this only for trusted diffs (your own work, or a
+   contributor branch you have read); for an untrusted diff, run in a sandbox
+   or skip with an explicit note. "The change is miniature" is not an
+   exemption; miniature lifecycle changes are where this pack earns its keep.
 
 6. **Peer-concurrency sweep.** For every shared artifact in the step-1 inventory
    (workspace-scoped files, records, sockets, locks), assume TWO instances of the
