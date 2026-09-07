@@ -19,12 +19,19 @@
 #                     files ignored (--no-approve). Context files are OFF here on
 #                     purpose: Pi folds the workdir's AGENTS.md/CLAUDE.md — and
 #                     every ancestor directory's, up to / — into the SYSTEM
-#                     prompt, and Pi's read/grep/find are not fenced to the
-#                     workdir (absolute paths and ~ resolve), so a hostile repo's
-#                     AGENTS.md could steer the reviewer at anything the user can
-#                     read. The rule packs the caller injects are the reviewer's
-#                     brief; a repo that wants house rules in the review puts them
-#                     in .claude/rules, which consort-review.sh fences as data.
+#                     prompt. The rule packs the caller injects are the
+#                     reviewer's brief; a repo that wants house rules in the
+#                     review puts them in .claude/rules, which consort-review.sh
+#                     fences as data.
+#
+# THE FENCE (pi-fence.mjs, a Pi extension loaded with -e on every run): Pi's
+# own tools resolve any path — absolute, ../, ~ — and Pi has no OS sandbox,
+# so the extension makes the workdir the boundary: every path argument of
+# read/grep/find/ls/edit/write must resolve (symlinks followed) inside the
+# workdir, and in read-only mode bash/edit/write are refused outright. Live-
+# tested: ~/.zshrc, a symlink to $HOME inside the workdir, and `ls ..` all
+# blocked; a file in the workdir read. bash in workspace-write is a shell and
+# cannot be fenced here — the reason that mode is opt-in.
 #   workspace-write — full built-in tool set (read,bash,edit,write,grep,find,ls),
 #                     Pi's default discovery of the repo's context files and the
 #                     user's extensions/skills; project-local .pi resources are
@@ -62,7 +69,9 @@
 #      Provider auth is Pi's own: `pi auth check --provider <id>`; Vertex reads
 #      GOOGLE_APPLICATION_CREDENTIALS / ADC + GOOGLE_CLOUD_PROJECT/LOCATION.
 
-_consort_pi_dir() { cd "$(dirname "${BASH_SOURCE[0]}")" && pwd; }
+# Resolved at source time: BASH_SOURCE may be relative, and the runner cd's
+# into the workdir before it needs this path.
+_CONSORT_PI_FENCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pi-fence.mjs"
 _consort_pi_provider() { echo "${CONSORT_PI_PROVIDER:-openai-codex}"; }
 _consort_pi_model() {
   if [ -n "${CONSORT_PI_MODEL:-}" ]; then echo "$CONSORT_PI_MODEL"; return; fi
@@ -235,7 +244,10 @@ _consort_pi_run() {
   [ "$errf" = /dev/null ] || ( umask 077; : >> "$errf" ) || return 1
   (
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
-    pi -p --mode json --no-session --offline "$@" 2>>"$errf"
+    # The fence extension (pi-fence.mjs) is loaded explicitly on every run;
+    # --no-extensions in read-only disables DISCOVERY only, -e paths still load.
+    CONSORT_PI_WORKDIR="${workdir:-$PWD}" CONSORT_PI_MODE="${CONSORT_PI_MODE:-read-only}" \
+    pi -p --mode json --no-session --offline -e "$_CONSORT_PI_FENCE" "$@" 2>>"$errf"
   )
 }
 
@@ -290,7 +302,7 @@ consort_pi_call() {
   )"
 
   local raw resp
-  raw="$(printf '%s' "$prompt" | _consort_pi_run "$workdir" --system-prompt "$sys" ${flags[@]+"${flags[@]}"})"
+  raw="$(printf '%s' "$prompt" | CONSORT_PI_MODE="$mode" _consort_pi_run "$workdir" --system-prompt "$sys" ${flags[@]+"${flags[@]}"})"
   if ! resp="$(printf '%s' "$raw" | _consort_pi_unwrap "$p" "$m")"; then
     if [ "$mode" = "workspace-write" ]; then
       echo "consort: workspace-write run REJECTED after the fact — $workdir may carry edits from a run that was not served by the requested model; inspect \`git status\` / \`git diff\` there before trusting anything in it" >&2

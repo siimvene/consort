@@ -226,16 +226,18 @@ model (`responseModel`), that is checked too. Read-only calls run with
 context files (non-inheriting, like Codex's `--ignore-user-config`) and
 `--no-approve`. Context files are off on purpose: Pi folds the workdir's
 `AGENTS.md`/`CLAUDE.md` and every ancestor directory's into the *system*
-prompt, and its read/grep/find are not fenced to the workdir, so a hostile
-checkout's context file could steer the reviewer at anything you can read.
-House rules for the review go in `.claude/rules`, which `consort-review.sh`
-fences as data. Workspace-write gets the full built-in tool set and the
-repo's context files, still with `--no-approve` (`.pi/settings.json` can set
-`shellPath`, `.pi/extensions` run at startup). Pi has no OS sandbox: the tool
-allowlist and the workdir are the fences, as with the gemini cli transport's
-`--yolo`, and unlike Codex there is no sandbox at all, so workspace-write is
-opt-in (`CONSORT_PI_UNSANDBOXED_WRITE_OK=1`); review and consult need no
-opt-in. Every run is `--offline`, the backend requires Pi >= 0.84.0 and
+prompt; house rules for the review go in `.claude/rules`, which
+`consort-review.sh` fences as data. Pi's own tools resolve any path
+(absolute, `../`, `~`) and Pi has no OS sandbox, so consort loads a fence
+extension (`scripts/pi-fence.mjs`) on every run: every path argument of
+read/grep/find/ls/edit/write must resolve, symlinks followed, inside the
+workdir, and in read-only mode bash/edit/write are refused outright
+(live-tested: `~/.zshrc`, a symlink to `$HOME` inside the workdir and
+`ls ..` blocked; a workdir file read). Workspace-write gets the full built-in
+tool set and the repo's context files, still with `--no-approve`
+(`.pi/settings.json` can set `shellPath`, `.pi/extensions` run at startup);
+its `bash` is a shell the fence cannot bound, so that mode is opt-in
+(`CONSORT_PI_UNSANDBOXED_WRITE_OK=1`); review and consult need no opt-in. Every run is `--offline`, the backend requires Pi >= 0.84.0 and
 refuses to start unless `rg` and `fd` are already resolvable — Pi's grep/find
 tools otherwise fetch an unpinned "latest" binary from GitHub on first use.
 Extracted results must carry the schema's top-level required keys; `{}` is
