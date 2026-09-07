@@ -225,10 +225,17 @@ sys.stdout.write(json.dumps(o))
 # $CONSORT_PI_STDERR, opened here after umask 077 so it is owner-only.
 _consort_pi_run() {
   local workdir="$1"; shift
+  # Resolve the stderr capture path BEFORE cd, or a relative CONSORT_PI_STDERR
+  # would land inside the (possibly untrusted, possibly ephemeral) workdir.
+  # Create it owner-only, then run Pi under the user's own umask: a umask
+  # around the whole process would also make every file the implementer
+  # writes 0600.
+  local errf="${CONSORT_PI_STDERR:-/dev/null}"
+  case "$errf" in /*) ;; *) errf="$PWD/$errf" ;; esac
+  [ "$errf" = /dev/null ] || ( umask 077; : >> "$errf" ) || return 1
   (
-    umask 077
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
-    pi -p --mode json --no-session --offline "$@" 2>>"${CONSORT_PI_STDERR:-/dev/null}"
+    pi -p --mode json --no-session --offline "$@" 2>>"$errf"
   )
 }
 
