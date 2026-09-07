@@ -22,10 +22,14 @@ still in 0.x.
   calls, tokens, cached, reasoning, cost); the server-reported
   `responseModel` is checked too where an adapter surfaces it. Read-only
   calls are non-inheriting (`--tools read,grep,find,ls`, no user
-  extensions/skills/templates, `--no-context-files`, `--no-approve`):
-  Pi folds the workdir's and every ancestor's `AGENTS.md`/`CLAUDE.md` into
-  the system prompt and its read/grep/find are not workdir-fenced, so a
-  hostile checkout's context file must not reach the reviewer.
+  extensions/skills/templates, `--no-context-files`, `--no-approve`): Pi
+  folds the workdir's and every ancestor's `AGENTS.md`/`CLAUDE.md` into the
+  system prompt, so a hostile checkout's context file must not reach the
+  reviewer. A fence extension (`scripts/pi-fence.mjs`, loaded with `-e` on
+  every run) bounds Pi's tools to the workdir: every path argument of
+  read/grep/find/ls/edit/write must resolve, symlinks followed, inside it,
+  and read-only refuses bash/edit/write outright — Pi's own tools resolve
+  absolute, `../` and `~` paths and there is no OS sandbox.
   Workspace-write gets the full tool set and the repo's context files, with
   `--no-approve` (`.pi/settings.json` `shellPath`, `.pi/extensions`). Every
   run is `--offline`; the backend refuses to start unless `rg` and `fd` are
