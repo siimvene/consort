@@ -69,8 +69,9 @@ consort_gemini_backend() {
 # settings exist. User and workspace settings are never touched.
 _consort_gemini_system_settings_default() {
   case "$(uname -s)" in
-    Darwin) echo "/Library/Application Support/GeminiCli/settings.json" ;;
-    *)      echo "/etc/gemini-cli/settings.json" ;;
+    Darwin)                  echo "/Library/Application Support/GeminiCli/settings.json" ;;
+    MINGW*|MSYS*|CYGWIN*)    echo "${PROGRAMDATA:-C:/ProgramData}/gemini-cli/settings.json" ;;
+    *)                       echo "/etc/gemini-cli/settings.json" ;;
   esac
 }
 # Writes the throwaway system settings to $1: the real system settings (JSONC
@@ -175,10 +176,15 @@ if start >= 0:
     except Exception:
         o = None
 if not isinstance(o, dict) or "response" not in o:
-    err = (o or {}).get("error") if isinstance(o, dict) else None
     print("consort: gemini CLI returned no --output-format json envelope"
-          + (f" (error: {json.dumps(err)[:300]})" if err else "")
-          + " — cannot prove which model ran; result discarded", file=sys.stderr)
+          " — cannot prove which model ran; result discarded", file=sys.stderr)
+    sys.exit(2)
+if o.get("error"):
+    # The formatter can attach a partial response to an error (stream cut,
+    # output cap). A run the CLI itself marked failed is not a review, however
+    # schema-shaped the fragment looks.
+    print(f"consort: gemini CLI marked the run failed (error: {json.dumps(o['error'])[:300]}); "
+          "partial response discarded", file=sys.stderr)
     sys.exit(2)
 stats = o.get("stats") or {}
 served = {}
@@ -215,9 +221,13 @@ EOF
 consort_gemini_probe() {
   local transport; transport="$(consort_gemini_transport)" || return 1
   if [ "$transport" = "cli" ]; then
-    local model; model="$(_consort_gemini_model)"
-    _consort_gemini_cli "" -m "$model" -p "Reply with exactly: GEMINI_ALIVE" 2>/dev/null </dev/null \
-      | _consort_gemini_unwrap "$model" 2>/dev/null | grep -o 'GEMINI_ALIVE' | head -1
+    # The CLI's own stderr is noise (deprecation, ripgrep); the unwrap's is the
+    # evidence line or the reason the probe failed, and stays visible.
+    local model tok; model="$(_consort_gemini_model)"
+    tok="$(_consort_gemini_cli "" -m "$model" -p "Reply with exactly: GEMINI_ALIVE" 2>/dev/null </dev/null \
+      | _consort_gemini_unwrap "$model" | grep -o 'GEMINI_ALIVE' | head -1)"
+    [ -n "$tok" ] && echo "$tok"
+    [ -n "$tok" ]
   else
     local tok proj loc host
     tok="${CONSORT_GEMINI_TOKEN:-$(gcloud auth print-access-token 2>/dev/null)}"; proj="$(_consort_gemini_project)"; loc="$(_consort_gemini_location)"
@@ -322,6 +332,12 @@ consort_gemini_call() {
   # The envelope proves which model served the run; a swap is discarded here,
   # so the caller sees an empty <out> (a FAILED call), never a wrong-model verdict.
   if ! resp="$(printf '%s' "$raw" | _consort_gemini_unwrap "$model")"; then
+    if [ "$mode" = "workspace-write" ]; then
+      # Attestation runs after the CLI exits; whatever served the rejected run
+      # may already have edited the tree under --yolo. Nothing is reverted here
+      # (the tree can hold the caller's own uncommitted work): say so, loudly.
+      echo "consort: workspace-write run REJECTED after the fact — $workdir may carry edits from a model that was not the requested one; inspect \`git status\` / \`git diff\` there before trusting anything in it" >&2
+    fi
     : > "$out"; return 0
   fi
   printf '%s' "$resp" | _consort_extract_json > "$out" 2>/dev/null || : > "$out"
