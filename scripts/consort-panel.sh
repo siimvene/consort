@@ -20,10 +20,16 @@
 #                       CONSORT_PI_MODEL, so the provider's own default applies
 #                       (an ambient gpt model on a google provider would be a
 #                       guaranteed served-model mismatch, not a review).
-#   CONSORT_PANEL_DIR   where leg results go (default: a fresh mktemp -d, kept).
-#                       Stale <label>.json/.stderr/.exit for this run's legs are
-#                       removed first — a previous run's file must never read as
-#                       this run's verdict.
+#   CONSORT_PANEL_DIR   parent directory for results (default: mktemp -d). Every
+#                       run creates its OWN fresh subdirectory in it (exclusive
+#                       mkdir, named by timestamp and pid) and reports that path
+#                       as "dir" in the manifest — so two panels sharing the same
+#                       parent never see each other's files, and a previous
+#                       run's manifest can never read as this run's verdict. The
+#                       parent must be a directory the caller owns, not a symlink,
+#                       not world-writable. Every file is created exclusively
+#                       (noclobber, O_EXCL): a planted path is refused, never
+#                       followed or truncated.
 #   CONSORT_PANEL_TIMEOUT  wall-clock cap per leg in seconds (default 1800; 0 = none).
 #                       A leg past its cap is killed (whole process group) and
 #                       reported as "timeout", never as clean.
@@ -45,10 +51,14 @@
 # panel configured for two vendors that got one vendor's reading is not the
 # panel that was configured, and the caller must know before believing it.
 set -uo pipefail
+# Every `>` in this script must create its file: an existing path — a stale
+# result, a planted symlink — is an error, not something to follow or truncate.
+set -o noclobber
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REVIEW="$ROOT/scripts/consort-review.sh"
 BASE="${1:-}"
+case "$BASE" in -*) echo "consort-panel: base ref must not start with '-' (got '$BASE')" >&2; exit 2 ;; esac
 REVIEWERS="${CONSORT_REVIEWERS:-codex}"
 TIMEOUT="${CONSORT_PANEL_TIMEOUT:-1800}"
 case "$TIMEOUT" in ''|*[!0-9]*) echo "consort-panel: CONSORT_PANEL_TIMEOUT must be an integer number of seconds (got '$TIMEOUT')" >&2; exit 2 ;; esac
@@ -59,6 +69,7 @@ IFS=',' read -ra RAW <<< "$REVIEWERS"
 for raw in ${RAW[@]+"${RAW[@]}"}; do
   spec="$(printf '%s' "$raw" | tr -d '[:space:]')"
   [ -n "$spec" ] || continue
+  case "$spec" in *[[:cntrl:]]*) echo "consort-panel: leg spec contains control characters" >&2; exit 2 ;; esac
   IFS=':' read -r backend a b extra <<< "$spec"
   if [ -n "${extra:-}" ]; then
     echo "consort-panel: bad leg '$spec' (too many ':' fields)" >&2; exit 2
@@ -94,14 +105,29 @@ done
 [ -x "$REVIEW" ] || [ -f "$REVIEW" ] || { echo "consort-panel: missing $REVIEW" >&2; exit 2; }
 
 # ---- result directory -------------------------------------------------------
-DIR="${CONSORT_PANEL_DIR:-}"
-if [ -n "$DIR" ]; then
-  mkdir -p "$DIR" || { echo "consort-panel: cannot create CONSORT_PANEL_DIR=$DIR" >&2; exit 2; }
-  DIR="$(cd "$DIR" && pwd -P)"
+PARENT="${CONSORT_PANEL_DIR:-}"
+if [ -n "$PARENT" ]; then
+  [ -e "$PARENT" ] || mkdir -p "$PARENT" || { echo "consort-panel: cannot create CONSORT_PANEL_DIR=$PARENT" >&2; exit 2; }
+  # The panel creates files below here by name. The parent must be ours: a
+  # directory another uid owns (a shared CI scratch, a pre-created /tmp name)
+  # or one others can write into turns those names into their file handles.
+  if [ -L "$PARENT" ] || [ ! -d "$PARENT" ] || [ ! -O "$PARENT" ]; then
+    echo "consort-panel: CONSORT_PANEL_DIR must be a directory you own (not a symlink): $PARENT" >&2; exit 2
+  fi
+  if [ -n "$(find "$PARENT" -maxdepth 0 -perm -o+w 2>/dev/null)" ]; then
+    echo "consort-panel: CONSORT_PANEL_DIR is world-writable, refusing: $PARENT" >&2; exit 2
+  fi
+  PARENT="$(cd "$PARENT" && pwd -P)"
 else
-  DIR="$(mktemp -d)" || exit 2
+  PARENT="$(mktemp -d)" || exit 2
 fi
-for l in "${LABELS[@]}"; do rm -f "$DIR/$l.json" "$DIR/$l.stderr" "$DIR/$l.exit" "$DIR/$l.start"; done
+# One fresh, exclusively created directory per run: no stale leg file, no
+# stale manifest, no two concurrent panels writing the same names.
+DIR="$PARENT/panel-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+n=0; while ! mkdir "$DIR" 2>/dev/null; do
+  n=$((n+1)); [ "$n" -lt 100 ] || { echo "consort-panel: cannot create a run directory under $PARENT" >&2; exit 2; }
+  DIR="$PARENT/panel-$(date -u +%Y%m%dT%H%M%SZ)-$$-$n"
+done
 
 # ---- launch legs ------------------------------------------------------------
 # Job control on: each background job gets its own process group, so a leg
@@ -109,7 +135,17 @@ for l in "${LABELS[@]}"; do rm -f "$DIR/$l.json" "$DIR/$l.stderr" "$DIR/$l.exit"
 # and whatever the CLI spawned) instead of orphaning a still-billing model
 # call. Bash prints no job notices in a non-interactive shell.
 set -m
-PIDS=(); MODELS=()
+PIDS=(); MODELS=(); STARTS=()
+# Cleanup is armed BEFORE the first leg starts, and a leg that shrugs off
+# TERM gets KILL a second later: a wrapper must never exit leaving a
+# still-billing reviewer behind it.
+kill_all() {
+  local p
+  for p in ${PIDS[@]+"${PIDS[@]}"}; do [ -n "$p" ] && kill -TERM -- "-$p" 2>/dev/null; done
+  sleep 1
+  for p in ${PIDS[@]+"${PIDS[@]}"}; do [ -n "$p" ] && kill -KILL -- "-$p" 2>/dev/null; done
+}
+trap 'kill_all; echo "consort-panel: interrupted, legs killed" >&2; exit 130' INT TERM
 leg_env_run() {  # <index> <command...> — runs a command under leg i's env
   local i="$1"; shift
   local -a e u
@@ -121,7 +157,10 @@ for i in "${!LABELS[@]}"; do
   l="${LABELS[$i]}"
   # Resolve the model string the way the leg itself will, for the manifest.
   MODELS+=("$(leg_env_run "$i" bash -c '. "$1/scripts/consort-backend.sh" 2>/dev/null; consort_impl_model 2>/dev/null' _ "$ROOT" || true)")
-  date +%s > "$DIR/$l.start"
+  # Start stamps stay in memory: a value read back from a file would be
+  # substituted into $(( )) below, and bash expands array subscripts there —
+  # file bytes like a[$(cmd)] would run cmd.
+  STARTS+=("$(date +%s)")
   (
     leg_env_run "$i" bash "$REVIEW" ${BASE:+"$BASE"} > "$DIR/$l.json" 2> "$DIR/$l.stderr"
     echo $? > "$DIR/$l.exit"
@@ -130,43 +169,48 @@ for i in "${!LABELS[@]}"; do
   echo "consort-panel: [$l] started (${BACKENDS[$i]}, model ${MODELS[$i]:-?}, pid $!)" >&2
 done
 
-kill_all() { for p in ${PIDS[@]+"${PIDS[@]}"}; do kill -TERM -- "-$p" 2>/dev/null; done; }
-trap 'kill_all; echo "consort-panel: interrupted, legs killed" >&2; exit 130' INT TERM
-
 # ---- wait, enforcing the per-leg cap ----------------------------------------
+# A reaped pid is cleared from PIDS at once: a recycled pid would otherwise
+# make kill_all signal some unrelated process group of the same user.
 while :; do
   pending=0; now="$(date +%s)"
   for i in "${!LABELS[@]}"; do
     l="${LABELS[$i]}"; p="${PIDS[$i]}"
-    [ -f "$DIR/$l.exit" ] && continue
+    [ -n "$p" ] || continue
+    if [ -f "$DIR/$l.exit" ]; then wait "$p" 2>/dev/null; PIDS[$i]=""; continue; fi
     if kill -0 "$p" 2>/dev/null; then
-      if [ "$TIMEOUT" -gt 0 ] && [ $(( now - $(cat "$DIR/$l.start") )) -ge "$TIMEOUT" ]; then
+      if [ "$TIMEOUT" -gt 0 ] && [ $(( now - STARTS[i] )) -ge "$TIMEOUT" ]; then
         kill -TERM -- "-$p" 2>/dev/null; sleep 1; kill -KILL -- "-$p" 2>/dev/null
         wait "$p" 2>/dev/null
-        [ -f "$DIR/$l.exit" ] || echo 124 > "$DIR/$l.exit"
+        if kill -0 -- "-$p" 2>/dev/null; then
+          echo "consort-panel: [$l] process group $p survived TERM+KILL — it may still be running (and billing); check it by hand" >&2
+        fi
+        PIDS[$i]=""
+        [ -f "$DIR/$l.exit" ] || echo 124 > "$DIR/$l.exit" 2>/dev/null
         echo "consort-panel: [$l] killed after ${TIMEOUT}s (CONSORT_PANEL_TIMEOUT)" >&2
       else
         pending=1
       fi
     else
       # Process gone without writing an exit file (killed from outside): failed.
-      wait "$p" 2>/dev/null
-      [ -f "$DIR/$l.exit" ] || echo 143 > "$DIR/$l.exit"
+      wait "$p" 2>/dev/null; PIDS[$i]=""
+      [ -f "$DIR/$l.exit" ] || echo 143 > "$DIR/$l.exit" 2>/dev/null
     fi
   done
   [ "$pending" -eq 1 ] || break
   sleep 2
 done
-for p in "${PIDS[@]}"; do wait "$p" 2>/dev/null; done
+for p in ${PIDS[@]+"${PIDS[@]}"}; do [ -n "$p" ] && wait "$p" 2>/dev/null; done
 trap - INT TERM
 
 # ---- report -----------------------------------------------------------------
-json_str() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n'; }
-rc=0; any_excluded=0; legs_json=""
+rc=0; any_excluded=0; LEGARGS=()
 for i in "${!LABELS[@]}"; do
   l="${LABELS[$i]}"
-  code="$(cat "$DIR/$l.exit" 2>/dev/null || echo 1)"
-  secs=$(( $(date +%s) - $(cat "$DIR/$l.start") ))
+  code="$(cat "$DIR/$l.exit" 2>/dev/null)"
+  # File bytes are data: only a plain integer is an exit code, anything else is a failure.
+  case "$code" in ''|*[!0-9]*) code=1 ;; esac
+  secs=$(( $(date +%s) - STARTS[i] ))
   if [ -s "$DIR/$l.stderr" ]; then sed "s/^/[$l] /" "$DIR/$l.stderr" >&2; fi
   case "$code" in
     0)   if [ -s "$DIR/$l.json" ]; then status=ok; else status=failed; rc=3; fi ;;
@@ -174,14 +218,19 @@ for i in "${!LABELS[@]}"; do
     124) status=timeout; rc=3 ;;
     *)   status=failed; rc=3 ;;
   esac
-  [ "$status" = ok ] || : > "$DIR/$l.json"   # never leave a non-result that parses as one
+  if [ "$status" != ok ]; then rm -f "$DIR/$l.json"; : > "$DIR/$l.json"; fi   # never leave a non-result that parses as one
   n="$(node -e 'try{const f=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).findings;console.log(Array.isArray(f)?f.length:"?")}catch{console.log("?")}' "$DIR/$l.json" 2>/dev/null || echo '?')"
   echo "consort-panel: [$l] $status — exit $code, ${secs}s, findings: $n" >&2
-  legs_json+="${legs_json:+,}{\"label\":\"$(json_str "$l")\",\"spec\":\"$(json_str "${SPECS[$i]}")\",\"backend\":\"$(json_str "${BACKENDS[$i]}")\",\"model\":\"$(json_str "${MODELS[$i]}")\",\"status\":\"$status\",\"exit\":$code,\"seconds\":$secs,\"file\":\"$(json_str "$DIR/$l.json")\"}"
+  LEGARGS+=("$l" "${SPECS[$i]}" "${BACKENDS[$i]}" "${MODELS[$i]}" "$status" "$code" "$secs" "$DIR/$l.json")
 done
 [ "$rc" -ne 0 ] || [ "$any_excluded" -eq 0 ] || rc=4
-manifest="{\"dir\":\"$(json_str "$DIR")\",\"exit\":$rc,\"legs\":[$legs_json]}"
-printf '%s\n' "$manifest" | tee "$DIR/panel.json"
+# A real serializer: labels are sanitized, but dir/model strings are not.
+manifest="$(node -e '
+const [dir, rc, ...r] = process.argv.slice(1); const legs = [];
+for (let i = 0; i < r.length; i += 8) legs.push({ label: r[i], spec: r[i+1], backend: r[i+2], model: r[i+3], status: r[i+4], exit: Number(r[i+5]), seconds: Number(r[i+6]), file: r[i+7] });
+process.stdout.write(JSON.stringify({ dir, exit: Number(rc), legs }));' "$DIR" "$rc" "${LEGARGS[@]}")"
+printf '%s\n' "$manifest" > "$DIR/panel.json" || echo "consort-panel: could not write $DIR/panel.json" >&2
+printf '%s\n' "$manifest"
 if [ "$rc" -eq 3 ]; then
   echo "consort-panel: at least one leg DID NOT produce a review — this is a FAILED panel, not a clean one; do not treat the other legs' results as the configured panel." >&2
 fi

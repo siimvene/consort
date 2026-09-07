@@ -87,7 +87,8 @@ stated, graded, answered across rounds, and re-checked after fixes; and
      file and status. Packs are injected into every leg's prompt by the
      script. A leg with status `failed` or `timeout` (panel exit 3) means
      that reviewer DID NOT RUN: report it as a failed gate, never fold the
-     remaining legs into a "clean" verdict. Check each leg's `seconds` and
+     remaining legs into a "clean" verdict. Panel exit 4 means every changed
+     file was excluded: nothing was reviewed, do not merge. Check each leg's `seconds` and
      its relayed `[label]` stderr evidence line (tool calls, tokens, served
      model) — a multi-hundred-line diff reviewed in seconds did not happen.
    - **Security side-agent:** write the exact diff under review to a temp

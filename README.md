@@ -151,8 +151,11 @@ two vendors' readings on every diff — not "whichever is reachable" — runs
 `scripts/consort-panel.sh [base]` instead of `consort-review.sh` directly.
 It reads `CONSORT_REVIEWERS` (comma-separated legs, default `codex`), runs
 `consort-review.sh` once per leg in parallel, each under its own backend env,
-and writes one findings file per leg into `CONSORT_PANEL_DIR` (default: a
-fresh temp dir, kept). Leg grammar: `codex[:model]`, `gemini[:model]`,
+and writes one findings file per leg into a fresh, exclusively created
+subdirectory of `CONSORT_PANEL_DIR` (default: a temp dir; the manifest's `dir`
+names the run's own directory, so concurrent panels sharing a parent never
+touch each other's files, and the parent must be a directory you own, not a
+symlink, not world-writable). Leg grammar: `codex[:model]`, `gemini[:model]`,
 `pi[:provider[:model]]` — so `codex,pi:google-vertex` is the Codex CLI plus
 Gemini 3.1 Pro through Pi, and `codex,gemini,pi:openai-codex:gpt-5.6-sol`
 is three legs. A leg that pins a provider but no model unsets any ambient
@@ -166,8 +169,9 @@ or runs past `CONSORT_PANEL_TIMEOUT` (default 1800 s; the whole process group
 is killed) makes the panel exit 3 with that leg's file empty — the other legs'
 results stay on disk, but the panel you configured did not run, and the
 gate's rule is hard-fail, never degrade. An all-excluded diff propagates as
-exit 4. Stale files for this run's legs are removed before it starts, so a
-previous run can never read as this one's verdict.
+exit 4: nothing was model-reviewed, so do not merge those files as if they
+were readings. Interrupting the panel kills every leg's process group (TERM,
+then KILL), so no reviewer keeps billing behind a dead wrapper.
 
 `merge-findings.mjs` takes any number of files (`<yours.json> <leg.json>...`,
 labels from the basenames or `label=path`) and clusters findings across all
@@ -284,11 +288,19 @@ Auth is Pi's own (`pi auth check --provider <id>`); Vertex reads
 `GOOGLE_CLOUD_LOCATION`. For google providers the consort-scoped names are
 honoured too and win when set, exported to the Pi process only:
 `CONSORT_GCP_PROJECT`, `CONSORT_GEMINI_LOCATION` (the gemini backend's
-variables) and `CONSORT_GCP_CREDENTIALS` (a service-account key file; must
-be readable or the backend refuses to start rather than fall through to
-whatever ADC the shell holds). That is how a machine whose user ADC is an
+variables) and `CONSORT_GCP_CREDENTIALS` (a service-account key file, resolved to an
+absolute path before the run changes directory; must be a readable regular
+file or the backend refuses to start rather than fall through to whatever
+ADC the shell holds). That is how a machine whose user ADC is an
 hourly-expiring workforce token keeps a Gemini leg alive from static config.
-`CONSORT_PI_STDERR` captures Pi's stderr (owner-only).
+The key file is accepted for read-only runs only, where the fence refuses
+bash and any read outside the workdir; a workspace-write run refuses it,
+because an unfenced shell one repo-injected `cat` away from a long-lived key
+is not a trust boundary. A run whose final message stopped at the output
+token limit is discarded as truncated, not parsed as a partial result.
+`CONSORT_PI_STDERR` captures Pi's stderr and `CONSORT_PI_RAW` its raw
+`--mode json` event stream (both owner-only) — the evidence to open when a
+run was discarded.
 
 Delegation entries in `.consort/log.jsonl` record which backend + model served
 each task.

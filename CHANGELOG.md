@@ -51,6 +51,32 @@ still in 0.x.
   `consort-panel.sh` and merge every leg; the presented order is now
   "caught by more than one reviewer", each reviewer's "only" section, then
   the principal's (was: both / Claude only / Codex only).
+- Hardened by the gate before release (Codex, the blind security agent and
+  the principal, on the panel's own diff): each panel run gets a fresh,
+  exclusively created subdirectory of `CONSORT_PANEL_DIR` (concurrent
+  panels sharing a parent no longer corrupt each other; a stale manifest
+  can no longer read as the current verdict), the parent must be owned by
+  the caller and not world-writable, every file is created with noclobber
+  so a planted symlink is refused rather than followed, leg start times
+  stay in memory (a stamp read back from disk was substituted into bash
+  arithmetic, which expands array subscripts — command execution for anyone
+  who could write the file), exit codes read from disk are validated as
+  integers, the manifest is built by a real JSON serializer, reaped pids are
+  cleared so a recycled pid is never signalled, cleanup is armed before the
+  first leg starts and escalates TERM→KILL, a base ref starting with `-` is
+  rejected (both in the panel and in `consort-review.sh`), `/consort:review`
+  quotes its argument, `merge-findings.mjs` strips control characters from
+  reviewer text, renders a severity outside the schema enum as `unknown`,
+  and opens the report with a data-fence line. Pi backend:
+  `CONSORT_GCP_CREDENTIALS` is resolved to an absolute regular file before
+  the run changes directory, refused for workspace-write runs (an unfenced
+  shell must not have a long-lived key in its environment), a run whose
+  final message stopped at the output token limit is discarded as truncated,
+  the JSON extractor says why it found no result, and `CONSORT_PI_RAW`
+  captures the raw event stream as evidence. Deferred, pre-existing: a
+  repo-local `.claude/rules/` is auto-injected into every reviewer's prompt
+  (0.4.0 design), which a hostile repo could use to talk every leg into an
+  empty result at once — opt-in or fencing is tracked as follow-up.
 
 ## [0.8.0] — 2026-09-07
 
