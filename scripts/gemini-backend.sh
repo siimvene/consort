@@ -135,17 +135,26 @@ EOF
 # feed mcpServers (child processes) and telemetry endpoints. The real
 # system-defaults path is pinned explicitly for the same reason.
 #   $1 = workdir ("" = stay put); rest = extra gemini args. Stdin passes through.
-#   The CLI's stderr goes to $CONSORT_GEMINI_STDERR (default /dev/null); the
-#   file is opened HERE, after umask 077, so it is owner-only — a redirection
-#   on the caller's side would be opened with the caller's umask instead.
+#   The CLI's stderr goes to $CONSORT_GEMINI_STDERR (default /dev/null),
+#   resolved against the caller's cwd and created owner-only HERE before the
+#   cd — a redirection on the caller's side would be opened with the
+#   caller's umask instead, and a relative path after the cd would land in
+#   the workdir.
 _consort_gemini_cli() {
   local workdir="$1"; shift
+  # Resolve the stderr capture path BEFORE cd, or a relative
+  # CONSORT_GEMINI_STDERR would land inside the (possibly untrusted,
+  # possibly ephemeral) workdir. Create it owner-only up front; the CLI then
+  # runs under the user's own umask, because a umask around the whole
+  # process would also make every file a workspace-write run creates 0600.
+  local errf="${CONSORT_GEMINI_STDERR:-/dev/null}"
+  case "$errf" in /*) ;; *) errf="$PWD/$errf" ;; esac
+  [ "$errf" = /dev/null ] || ( umask 077; : >> "$errf" ) || return 1
   (
-    umask 077
-    d="$(mktemp -d "${TMPDIR:-/tmp}/consort-gemini.XXXXXX")" || exit 1
+    d="$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/consort-gemini.XXXXXX")" || exit 1
     trap 'rm -rf "$d"' EXIT
     trap 'rm -rf "$d"; exit 130' INT TERM HUP
-    _consort_gemini_write_settings "$d/settings.json" || exit 1
+    ( umask 077 && _consort_gemini_write_settings "$d/settings.json" ) || exit 1
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
     defaults="${GEMINI_CLI_SYSTEM_DEFAULTS_PATH:-$(dirname "${GEMINI_CLI_SYSTEM_SETTINGS_PATH:-$(_consort_gemini_system_settings_default)}")/system-defaults.json}"
     GOOGLE_GENAI_USE_VERTEXAI=true \
@@ -154,7 +163,7 @@ _consort_gemini_cli() {
     GEMINI_CLI_TRUST_WORKSPACE=true \
     GEMINI_CLI_SYSTEM_SETTINGS_PATH="$d/settings.json" \
     GEMINI_CLI_SYSTEM_DEFAULTS_PATH="$defaults" \
-    gemini --skip-trust --output-format json "$@" 2>>"${CONSORT_GEMINI_STDERR:-/dev/null}"
+    gemini --skip-trust --output-format json "$@" 2>>"$errf"
   )
 }
 
