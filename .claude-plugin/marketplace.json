@@ -1,19 +1,25 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "consort",
-  "description": "Cross-model review harness pairing Claude Code with a local Codex CLI.",
+  "description": "Cross-model review harness pairing Claude Code with a local Codex CLI or Gemini on Vertex AI.",
   "owner": {
     "name": "Siim Vene"
   },
   "plugins": [
     {
       "name": "consort",
-      "description": "Claude orchestrates and reviews; Codex (gpt-5.6) implements and cross-reviews. Surfaces the findings only one model caught.",
-      "version": "0.5.0",
+      "description": "Claude orchestrates and reviews; Codex (gpt-5.6) or Gemini (Vertex AI) implements and cross-reviews. Surfaces the findings only one model caught.",
+      "version": "0.7.0",
       "source": "./",
       "category": "productivity",
-      "tags": ["cross-model", "code-review", "codex", "second-opinion"]
+      "tags": [
+        "cross-model",
+        "code-review",
+        "codex",
+        "second-opinion",
+        "gemini"
+      ]
     }
   ],
-  "version": "0.5.0"
+  "version": "0.7.0"
 }

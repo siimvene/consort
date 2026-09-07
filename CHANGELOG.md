@@ -5,6 +5,52 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.7.0] — 2026-09-07
+
+### Changed
+- **Codex exec transport runs read-only calls with `--ignore-user-config`**,
+  reasoning effort pinned via `CONSORT_CODEX_REASONING` (default `high`). The
+  reviewer no longer inherits `~/.codex/config.toml` plugins, plugin hooks,
+  MCP servers or `developer_instructions`. Measured on a 25-file diff: a stock
+  config whose oh-my-codex prompt hook matched "parallel mode" inside a rule
+  pack fanned the review into three subagents and re-prompted from its Stop
+  hook — 10.7M input tokens, 909 s; the bypass reviewed the same diff in 2.46M
+  tokens, 495 s, with the same real findings. Workspace-write (delegation)
+  keeps the user config, where sandbox narrowing and approval policy live;
+  `CONSORT_CODEX_USER_CONFIG=1` keeps it for read-only calls too. A CLI
+  without the flag falls back to the stock config with a stderr warning.
+  (Gate: a free-form `CONSORT_CODEX_ARGS` passthrough was dropped before
+  release — env-supplied argv after `-s` could have revoked the sandbox.)
+
+### Added
+- **Opt-in diff path excludes in `consort-review.sh`** (`CONSORT_DIFF_EXCLUDE`,
+  colon-separated git pathspec globs matched from the repo root) for repos
+  that commit generated artefacts. Nothing is excluded by default: lockfiles
+  stay in, as the supply-chain rule requires. Excluded paths are listed on
+  stderr and handed to the reviewer as fenced data; an all-excluded diff
+  exits 4 instead of passing as clean. The diff is now taken from the repo
+  root (`:/`) regardless of the caller's cwd.
+- `CONSORT_GEMINI_STDERR`: file to append the Gemini CLI's stderr to
+  (created owner-only; dropped by default).
+
+### Fixed
+- **Gemini cli transport reviewed diff-only.** Headless `gemini` made zero
+  tool calls in every review run (three measured), so the "repo-reading"
+  transport could not do the caller sweeps the rule packs ask for. The prompt
+  now orders it to read every touched file and sweep callers, consumers,
+  schedulers and docs of every removed symbol before answering; runs after the
+  fix made 25–34 tool calls.
+- **Gemini cli transport `@` expansion.** The CLI's `@file` expander
+  (`(?<!\\)@` + path chars) read a unified diff's `@@` hunk headers as file
+  references and injected unrelated repo files into the prompt. Every `@` in
+  the prompt is now backslash-escaped, the CLI's own escape, which headless
+  mode passes through as literal text.
+- **Gemini api probe false negative.** `consort_gemini_probe` capped output at
+  16 tokens, which a thinking model spends on thoughts (`finishReason:
+  MAX_TOKENS`, empty text), so a live backend read as dead. Cap raised to 256
+  and any candidate with a `finishReason` now counts as alive — the probe
+  proves reachability, auth and quota, nothing more.
+
 ## [0.6.0] — 2026-09-04
 
 ### Added

@@ -55,12 +55,48 @@ consort_codex_call() {
 
   if [ "$backend" = "exec" ]; then
     local sandbox="$mode"
+    # Read-only calls (review/consult) run WITHOUT the user's ~/.codex/config.toml:
+    # no plugins, plugin hooks, MCP servers or developer_instructions leak into
+    # the reviewer's context (the non-inheriting-context axis), and the bill
+    # stays proportional to the diff. Measured 2026-09-07 on a 25-file diff:
+    # with the stock config the oh-my-codex plugin's prompt hook matched
+    # "parallel mode" inside a rule pack, fanned the review out into three
+    # subagents and re-prompted from its Stop hook — 10.7M input tokens, 909s;
+    # with --ignore-user-config the same review took 2.46M tokens, 495s, same
+    # real findings. Reasoning effort is pinned (CONSORT_CODEX_REASONING) because
+    # the bypass also drops the user's setting.
+    # Workspace-write (delegation) KEEPS the user config: that is where an
+    # operator's [sandbox_workspace_write] narrowing and approval policy live.
+    # CONSORT_CODEX_USER_CONFIG=1 keeps it for read-only calls too (needed e.g.
+    # where config.toml carries a required [windows] sandbox selector). No
+    # free-form flag passthrough: env-supplied argv after `-s` could revoke the
+    # sandbox on a hostile checkout.
+    # Native fan-out is a second cost multiplier the config bypass does not
+    # touch: `codex exec` keeps its collaboration.spawn_agent tool even with
+    # -c features.multi_agent=false (probed 2026-09-07), and the gate review
+    # of this very change spawned three lanes unprompted (4.7M input tokens
+    # for a 14KB diff). A reviewer has no use for lanes, so read-only calls
+    # say so up front. A nudge, not a switch: unmeasured.
+    local sys_eff="$sys"
+    if [ "$mode" = "read-only" ]; then
+      sys_eff="Work alone in this session: do not spawn, list or wait on collaboration agents; do every read and sweep yourself. $sys"
+    fi
+    local cfg=()
+    if [ "$mode" = "read-only" ] && [ "${CONSORT_CODEX_USER_CONFIG:-0}" != "1" ]; then
+      if codex exec --help 2>/dev/null | grep -q -- '--ignore-user-config'; then
+        cfg=(--ignore-user-config -c "model_reasoning_effort=${CONSORT_CODEX_REASONING:-high}")
+      else
+        echo "consort: this codex CLI lacks --ignore-user-config; running the reviewer with the stock user config" >&2
+      fi
+    fi
     if [ -n "$payload" ]; then
       codex exec -m "$model" -s "$sandbox" -C "$workdir" --skip-git-repo-check \
-        --output-schema "$schema" -o "$out" "$sys" < "$payload" >/dev/null 2>&1 || true
+        ${cfg[@]+"${cfg[@]}"} \
+        --output-schema "$schema" -o "$out" "$sys_eff" < "$payload" >/dev/null 2>&1 || true
     else
       codex exec -m "$model" -s "$sandbox" -C "$workdir" --skip-git-repo-check \
-        --output-schema "$schema" -o "$out" "$sys" >/dev/null 2>&1 || true
+        ${cfg[@]+"${cfg[@]}"} \
+        --output-schema "$schema" -o "$out" "$sys_eff" >/dev/null 2>&1 || true
     fi
     return 0
   fi

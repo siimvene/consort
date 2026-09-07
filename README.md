@@ -94,6 +94,16 @@ repo; the plugin itself ships only vendor-neutral review methodology in its
 `rules/` directory (`blast-surface.md`, `finding-discipline.md`, and
 `security-review.md`, always injected since 0.4.0, no setup needed).
 
+**Diff excludes (opt-in):** every diff byte is re-sent on every reviewer turn,
+so a repo that commits generated artefacts (baseline JSON, bundles) can name
+them in `CONSORT_DIFF_EXCLUDE` (colon-separated git pathspec globs, matched
+from the repo root). Nothing is excluded by default — lockfiles stay in,
+because the supply-chain rule in `security-review.md` needs the model to see
+dependency changes. Excluded paths are listed on stderr and handed to the
+reviewer as fenced data; a diff that is empty only because of excludes exits
+4, not 0. Whoever sets the variable owes the principal the same excludes, or
+the two sides stop reviewing the same diff.
+
 **Security scanners (optional):** when [Trivy](https://trivy.dev) is on PATH,
 `consort-scan.sh` adds a deterministic third voice to every review — dependency
 CVEs, leaked secrets, IaC misconfigurations — emitted in the same findings
@@ -147,6 +157,22 @@ Reaches Codex through one of two transports, resolved by `scripts/codex-backend.
 Auto-resolution prefers the plugin when installed; force either with
 `CONSORT_CODEX_BACKEND=plugin|exec`.
 
+For read-only calls (review, consult) the exec transport runs
+`codex exec --ignore-user-config` with reasoning effort pinned
+(`CONSORT_CODEX_REASONING`, default `high`): the reviewer sees none of your
+`~/.codex/config.toml` plugins, hooks, MCP servers or developer instructions,
+which keeps its context non-inheriting and its bill proportional to the diff.
+Measured 2026-09-07 on a 25-file diff: a stock config whose plugin hook
+matched "parallel mode" in a rule pack fanned the review into three subagents
+(10.7M input tokens, 15 min); the bypass ran the same review in 2.46M tokens
+and 8 min with the same real findings. Workspace-write (delegation) keeps
+your config, because that is where sandbox narrowing and approval policy
+live. `CONSORT_CODEX_USER_CONFIG=1` keeps it for read-only calls too — needed
+where `config.toml` carries something the reviewer cannot run without, such
+as a `[windows]` sandbox selector. A Codex CLI without the flag falls back
+to the stock config with a warning on stderr. The plugin transport uses the
+plugin runtime's own config.
+
 ### `CONSORT_BACKEND=gemini` — Google (Vertex AI)
 
 Reaches Gemini via ADC (`gcloud`/WIF), no API key, so it works where org policy
@@ -160,7 +186,12 @@ disallows keys. Two transports (`CONSORT_GEMINI_TRANSPORT=cli|api`, auto):
 
 Config: `CONSORT_GEMINI_MODEL` (default `gemini-3.1-pro-preview`),
 `CONSORT_GEMINI_LOCATION` (`global`; `europe-west4` for EU residency),
-`CONSORT_GCP_PROJECT`.
+`CONSORT_GCP_PROJECT`, `CONSORT_GEMINI_STDERR` (file to append the CLI's stderr
+to; dropped by default). The cli transport backslash-escapes every `@` in the
+prompt — the CLI's `@file` expander otherwise reads a diff's `@@` hunk headers
+as file references — and instructs the model to read touched files and sweep
+callers before answering; left to itself, headless Gemini answers from the diff
+alone.
 
 Delegation entries in `.consort/log.jsonl` record which backend + model served
 each task.
