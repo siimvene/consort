@@ -68,6 +68,16 @@
 #      CONSORT_PI_UNSANDBOXED_WRITE_OK=1  allow workspace-write (no OS sandbox)
 #      Provider auth is Pi's own: `pi auth check --provider <id>`; Vertex reads
 #      GOOGLE_APPLICATION_CREDENTIALS / ADC + GOOGLE_CLOUD_PROJECT/LOCATION.
+#      For google providers the consort-scoped names are honoured too, for
+#      the Pi process only (the caller's shell is never touched), and WIN over
+#      the ambient Google ones when set — they are the operator's explicit
+#      choice for consort runs, e.g. a service-account key on a machine whose
+#      user ADC is a workforce token that expires hourly:
+#        CONSORT_GCP_PROJECT      -> GOOGLE_CLOUD_PROJECT   (same var the gemini backend uses)
+#        CONSORT_GEMINI_LOCATION  -> GOOGLE_CLOUD_LOCATION  (same var the gemini backend uses)
+#        CONSORT_GCP_CREDENTIALS  -> GOOGLE_APPLICATION_CREDENTIALS (a readable file, or the
+#                                    backend refuses to start: a typo here must not fall
+#                                    through to whatever ADC the shell happens to hold)
 
 # Resolved at source time: BASH_SOURCE may be relative, and the runner cd's
 # into the workdir before it needs this path.
@@ -107,6 +117,10 @@ except Exception: sys.exit(1)' "$v" "$_CONSORT_PI_MIN_VERSION" \
     return 1
   fi
   _consort_pi_model >/dev/null || return 1
+  if [ -n "${CONSORT_GCP_CREDENTIALS:-}" ] && [ ! -r "$CONSORT_GCP_CREDENTIALS" ]; then
+    echo "consort: CONSORT_GCP_CREDENTIALS is set but not a readable file: $CONSORT_GCP_CREDENTIALS" >&2
+    return 1
+  fi
   # rg and fd (Debian ships fd as fdfind) on PATH, or already in Pi's own bin
   # (PI_CODING_AGENT_DIR overrides ~/.pi/agent).
   local pidir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" t alt
@@ -277,6 +291,13 @@ _consort_pi_run() {
   [ "$errf" = /dev/null ] || ( umask 077; : >> "$errf" ) || return 1
   (
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
+    # Consort-scoped Google settings, exported for this Pi process only.
+    case "$(_consort_pi_provider)" in
+      google*)
+        [ -z "${CONSORT_GCP_PROJECT:-}" ]     || export GOOGLE_CLOUD_PROJECT="$CONSORT_GCP_PROJECT"
+        [ -z "${CONSORT_GEMINI_LOCATION:-}" ] || export GOOGLE_CLOUD_LOCATION="$CONSORT_GEMINI_LOCATION"
+        [ -z "${CONSORT_GCP_CREDENTIALS:-}" ] || export GOOGLE_APPLICATION_CREDENTIALS="$CONSORT_GCP_CREDENTIALS" ;;
+    esac
     # The fence extension (pi-fence.mjs) is loaded explicitly on every run;
     # --no-extensions in read-only disables DISCOVERY only, -e paths still load.
     CONSORT_PI_WORKDIR="${workdir:-$PWD}" CONSORT_PI_MODE="${CONSORT_PI_MODE:-read-only}" \

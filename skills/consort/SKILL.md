@@ -68,12 +68,13 @@ own pass; run
 the blast-surface sweep on the diff and the scanner tier
 (`consort-scan.sh <workdir> > .consort/scan.json`, per
 `rules/security-review.md`). Produce your own findings
-(schemas/findings.schema.json). Get sol's: `consort-review.sh` (alias for
-consort-review.sh on the workdir). In parallel, spawn the plugin's
+(schemas/findings.schema.json). Get sol's: `consort-panel.sh` on the
+workdir (one `consort-review.sh` leg per entry of `CONSORT_REVIEWERS`,
+default `codex`; a failed leg is a failed review). In parallel, spawn the plugin's
 `security-reviewer` agent (non-inheriting) on the same diff — its findings
 join `review.md` as a **Security agent** section, verified like any
 cross-model lead. Merge:
-`merge-findings.mjs <your.json> <sol.json>`, then append the triaged scanner
+`merge-findings.mjs <your.json> <every leg file the panel manifest lists>`, then append the triaged scanner
 findings from `.consort/scan.json` to `review.md` as a **Scanners** section.
 Resolve every critical/high before advancing — scanner findings included; a
 reachable scanner critical (live credential, critical CVE in a dependency this

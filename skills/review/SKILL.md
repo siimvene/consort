@@ -79,9 +79,17 @@ stated, graded, answered across rounds, and re-checked after fixes; and
 5. Produce your own findings on the target diff, in `schemas/findings.schema.json`
    shape (`file, line, severity, title, detail`), applying the packs.
    Write to a temp JSON file.
-6. In parallel, get the two independent passes:
-   - **Codex:** `consort-review.sh` returns the schema (packs are injected
-     into its prompt by the script).
+6. In parallel, get the independent passes:
+   - **Cross-vendor reviewer(s):** `bash "$CLAUDE_PLUGIN_ROOT"/scripts/consort-panel.sh [base]`
+     runs `consort-review.sh` once per leg of `CONSORT_REVIEWERS` (default
+     `codex`; e.g. `codex,pi:google-vertex` for Codex plus Gemini through
+     Pi), in parallel, and prints a manifest naming each leg's findings
+     file and status. Packs are injected into every leg's prompt by the
+     script. A leg with status `failed` or `timeout` (panel exit 3) means
+     that reviewer DID NOT RUN: report it as a failed gate, never fold the
+     remaining legs into a "clean" verdict. Check each leg's `seconds` and
+     its relayed `[label]` stderr evidence line (tool calls, tokens, served
+     model) — a multi-hundred-line diff reviewed in seconds did not happen.
    - **Security side-agent:** write the exact diff under review to a temp
      file (same diff for uncommitted, staged, or branch-vs-base targets),
      then spawn the plugin's `security-reviewer` agent (non-inheriting —
@@ -91,9 +99,13 @@ stated, graded, answered across rounds, and re-checked after fixes; and
      returns the same findings schema. Same vendor as you, different
      context: it covers the independence axis the duet's cross-vendor pass
      doesn't need, and it reads the diff without your authoring assumptions.
-7. Merge the duet: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json codex.json`.
-8. Present in this order: **Both agree** (act first), **Codex only** (what you missed,
-   the real payoff), **Claude only** (Codex missed), then **Security agent**
+7. Merge: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json <dir>/codex.json [<dir>/pi-google-vertex.json ...]`
+   — every leg file the manifest lists. Exit 3 from the merge means a file
+   was empty or not a findings array (NO RESULT in the report): a failed leg,
+   not a clean one.
+8. Present in this order: **Caught by more than one reviewer** (act first),
+   each reviewer's **only** section (what you missed, the real payoff),
+   **Claude only** (no cross-vendor reviewer caught), then **Security agent**
    (side-agent findings; fold one into a duet finding only when it names the
    SAME trigger — two defects can share a file and line, so location match
    alone never discards a finding), then

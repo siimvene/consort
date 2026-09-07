@@ -1,54 +1,106 @@
 #!/usr/bin/env node
-// consort: merge two structured findings sets and surface the findings only ONE
-// model caught — the cross-model heterogeneity signal. (SWE-chat 4-tool study:
-// 93.4% of issues were caught by exactly one tool, so a single-model panel
-// misses most of them.)
+// consort: merge N structured findings sets (the principal's plus one or more
+// cross-vendor reviewers') and surface the findings only ONE reviewer caught —
+// the cross-model heterogeneity signal. (SWE-chat 4-tool study: 93.4% of
+// issues were caught by exactly one tool, so a single-model panel misses
+// most of them.)
 //
-// Usage: node merge-findings.mjs <claude.json> <codex.json>
+// Usage: merge-findings.mjs <principal.json> <reviewer.json> [more.json ...]
 //   each file: {"findings":[{file,line,severity,title,detail}, ...]}
+//   any argument may be written label=path; otherwise the label is the file's
+//   basename without .json (claude.json -> "claude", pi-google-vertex.json ->
+//   "pi-google-vertex"). consort-panel.sh names its files that way.
+//
+// A file that is missing, empty, unparsable, or whose "findings" is not an
+// array is reported as NO RESULT for that reviewer — loudly, in the report,
+// with exit 3 — never as a clean reading. A leg that did not run and a leg
+// that found nothing must stay distinguishable.
 import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 
-const [claudePath, codexPath] = process.argv.slice(2);
-if (!claudePath || !codexPath) {
-  console.error('usage: merge-findings.mjs <claude.json> <codex.json>');
+const args = process.argv.slice(2);
+if (args.length < 2) {
+  console.error('usage: merge-findings.mjs <principal.json> <reviewer.json> [more.json ...]   (each may be label=path)');
   process.exit(2);
 }
 
-const load = (p) => {
-  try { return JSON.parse(readFileSync(p, 'utf8')).findings ?? []; }
-  catch { return []; }
+const parseArg = (a) => {
+  const m = /^([A-Za-z0-9._-]+)=(.+)$/.exec(a);
+  if (m) return { label: m[1], path: m[2] };
+  return { label: basename(a).replace(/\.json$/i, ''), path: a };
 };
+const load = (p) => {
+  try {
+    const f = JSON.parse(readFileSync(p, 'utf8')).findings;
+    return Array.isArray(f) ? f : null;
+  } catch { return null; }
+};
+
+const sets = args.map(parseArg).map((s) => ({ ...s, findings: load(s.path) }));
+const seen = new Set();
+for (const s of sets) {
+  if (seen.has(s.label)) { console.error(`merge-findings: duplicate label '${s.label}'`); process.exit(2); }
+  seen.add(s.label);
+}
+const principal = sets[0];
+const reviewers = sets.slice(1);
+const noResult = sets.filter((s) => s.findings === null);
+
 const norm = (s) => (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const PROXIMITY = 5; // same file + lines within this many rows => the same finding
-
-const claude = load(claudePath);
-const codex = load(codexPath);
-
-// Greedy pairwise match: a Claude finding and a Codex finding are "the same"
-// when they sit in the same file within PROXIMITY lines. Bucketing by line would
-// split findings that straddle a bucket boundary (e.g. line 42 vs 44).
-const both = [], claudeOnly = [];
-const codexMatched = new Array(codex.length).fill(false);
-for (const cf of claude) {
-  const j = codex.findIndex((xf, i) =>
-    !codexMatched[i] &&
-    norm(cf.file) === norm(xf.file) &&
-    Math.abs((Number(cf.line) || 0) - (Number(xf.line) || 0)) <= PROXIMITY);
-  if (j >= 0) { codexMatched[j] = true; both.push(cf); }
-  else claudeOnly.push(cf);
-}
-const codexOnly = codex.filter((_, i) => !codexMatched[i]);
-
 const rank = { critical: 0, high: 1, medium: 2, low: 3 };
-const bySeverity = (a, b) => (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9);
-const fmt = (f) => `  [${f.severity}] ${f.file}:${f.line} — ${f.title}`;
+const sevRank = (f) => rank[f.severity] ?? 9;
 
+// Greedy clustering across all sets, in argument order. A finding joins the
+// first cluster in the same file with a member within PROXIMITY lines that
+// has no member from its own set yet (two findings from one reviewer are two
+// findings, never one). Bucketing by line would split findings that straddle
+// a bucket boundary (e.g. line 42 vs 44), so the match is pairwise.
+const clusters = [];
+for (const s of sets) {
+  for (const f of s.findings ?? []) {
+    const line = Number(f.line) || 0;
+    const c = clusters.find((cl) =>
+      !cl.sources.has(s.label) &&
+      cl.file === norm(f.file) &&
+      cl.members.some((m) => Math.abs((Number(m.f.line) || 0) - line) <= PROXIMITY));
+    if (c) { c.sources.add(s.label); c.members.push({ src: s.label, f }); }
+    else clusters.push({ file: norm(f.file), sources: new Set([s.label]), members: [{ src: s.label, f }] });
+  }
+}
+// Representative = the most severe member (ties: earliest set); tags list
+// every reviewer that caught it.
+for (const c of clusters) {
+  c.rep = c.members.reduce((best, m) => (sevRank(m.f) < sevRank(best.f) ? m : best), c.members[0]).f;
+  c.tag = [...c.sources].join('+');
+}
+
+const bySeverity = (a, b) => sevRank(a.rep) - sevRank(b.rep);
+const byAgreementThenSeverity = (a, b) => (b.sources.size - a.sources.size) || bySeverity(a, b);
+const fmt = (c) => `  [${c.rep.severity}] ${c.rep.file}:${c.rep.line} — ${c.rep.title}  [${c.tag}]`;
+
+const counts = sets.map((s) => `${s.findings === null ? 'NO RESULT' : s.findings.length} ${s.label}`).join(' + ');
 const out = [];
-out.push(`\n## Cross-model review (${claude.length} Claude + ${codex.length} Codex findings)\n`);
-out.push(`### Both models agree (${both.length}) — highest confidence`);
-both.sort(bySeverity).forEach((f) => out.push(fmt(f)));
-out.push(`\n### Claude only (${claudeOnly.length}) — Codex did not catch`);
-claudeOnly.sort(bySeverity).forEach((f) => out.push(fmt(f)));
-out.push(`\n### Codex only (${codexOnly.length}) — Claude did not catch (the second-opinion payoff)`);
-codexOnly.sort(bySeverity).forEach((f) => out.push(fmt(f)));
+out.push(`\n## Cross-model review (${counts} findings)\n`);
+for (const s of noResult) {
+  out.push(`### ${s.label}: NO RESULT — ${s.path} is missing, empty or not a findings file. This reviewer DID NOT RUN; that is a failed leg, not a clean verdict.\n`);
+}
+const agreed = clusters.filter((c) => c.sources.size > 1).sort(byAgreementThenSeverity);
+out.push(`### Caught by more than one reviewer (${agreed.length}) — highest confidence`);
+agreed.forEach((c) => out.push(fmt(c)));
+for (const r of reviewers) {
+  if (r.findings === null) continue;
+  const only = clusters.filter((c) => c.sources.size === 1 && c.sources.has(r.label)).sort(bySeverity);
+  out.push(`\n### ${r.label} only (${only.length}) — no other reviewer caught (the second-opinion payoff)`);
+  only.forEach((c) => out.push(fmt(c)));
+}
+if (principal.findings !== null) {
+  const only = clusters.filter((c) => c.sources.size === 1 && c.sources.has(principal.label)).sort(bySeverity);
+  out.push(`\n### ${principal.label} only (${only.length}) — no cross-vendor reviewer caught`);
+  only.forEach((c) => out.push(fmt(c)));
+}
 console.log(out.join('\n'));
+if (noResult.length) {
+  console.error(`merge-findings: ${noResult.map((s) => s.label).join(', ')} produced no result — the panel is incomplete (exit 3)`);
+  process.exit(3);
+}

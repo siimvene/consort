@@ -5,6 +5,53 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.9.0] — 2026-09-07
+
+### Added
+- **Review panel — several cross-vendor reviewers on every diff, chosen
+  with `CONSORT_REVIEWERS`.** `scripts/consort-panel.sh [base]` runs
+  `consort-review.sh` once per leg (`codex[:model]`, `gemini[:model]`,
+  `pi[:provider[:model]]`; e.g. `codex,pi:google-vertex` = the Codex CLI
+  plus Gemini through Pi), in parallel, each under its own backend env, and
+  writes one findings file per leg plus a manifest (label, backend, model,
+  status, exit, seconds, file). A leg that fails, returns nothing, or runs
+  past `CONSORT_PANEL_TIMEOUT` (default 1800 s; the leg's whole process
+  group is killed) fails the panel (exit 3) with that leg's file emptied —
+  the other legs' results stay on disk, but the configured panel did not
+  run and the caller is told so; an all-excluded diff propagates as exit 4;
+  stale leg files from a previous run are removed first. Every leg's stderr
+  is relayed with a `[label]` prefix, so the backends' evidence lines stay
+  visible. A provider-pinned Pi leg with no model unsets an ambient
+  `CONSORT_PI_MODEL` so the provider default applies. Bash-native wall-clock
+  cap (no `timeout` binary needed); `scripts/consort-panel.test.sh` pins the
+  grammar, env plumbing, hard-fail, exit-4, timeout and stale-file rules
+  against a stub reviewer.
+- **`merge-findings.mjs` merges any number of findings sets.** Arguments
+  are `<principal.json> <reviewer.json>...` (labels from basenames or
+  `label=path`); findings cluster across all sets by file and line
+  proximity, one finding per set per cluster, the representative being the
+  most severe member. Sections: caught by more than one reviewer (tagged
+  with every reviewer that caught it, sorted by agreement then severity),
+  each reviewer's "only" section, then the principal's. A file that is
+  missing, empty, `{}` or `{"findings":null}` is reported as **NO RESULT**
+  in the report and exits 3 — previously it merged silently as an empty
+  (clean) set. `scripts/merge-findings.test.mjs` pins the contract.
+- **Pi backend honours consort-scoped Google settings** for google
+  providers, exported to the Pi process only and winning over the ambient
+  Google variables when set: `CONSORT_GCP_PROJECT` → `GOOGLE_CLOUD_PROJECT`,
+  `CONSORT_GEMINI_LOCATION` → `GOOGLE_CLOUD_LOCATION`,
+  `CONSORT_GCP_CREDENTIALS` → `GOOGLE_APPLICATION_CREDENTIALS`. The
+  credentials path must be a readable file or the backend refuses to start,
+  so a typo cannot fall through to whatever ADC the shell holds. Lets a
+  static config keep a Gemini leg alive where the user's ADC is an
+  hourly-expiring workforce token.
+
+### Changed
+- `/consort:review`, the `review` skill and the lifecycle skill call
+  `consort-panel.sh` and merge every leg; the presented order is now
+  "caught by more than one reviewer", each reviewer's "only" section, then
+  the principal's (was: both / Claude only / Codex only).
+
 ## [0.8.0] — 2026-09-07
 
 ### Added

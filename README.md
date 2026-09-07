@@ -19,7 +19,7 @@ and no model's work ships on its own word.
 |---|---|---|
 | **Reference pair** | Claude Code session (e.g. `claude-fable-5`) | `codex exec` (default `gpt-5.6-sol`) |
 | **Job** | Orchestrates every phase, holds the thread, reviews, adjudicates, and **verifies everything itself**. Writes glue, never bulk code. Also a blind panel voice via headless `claude -p`. | Implements in a workspace-write sandbox, and serves as the second blind voice in panels and reviews. Returns schema-forced results, never prose. |
-| **Swap it** | any strong session model | model via `CONSORT_IMPL_MODEL`; whole vendor via `CONSORT_BACKEND=codex\|gemini\|pi` (Pi: any provider via `CONSORT_PI_PROVIDER`) |
+| **Swap it** | any strong session model | model via `CONSORT_IMPL_MODEL`; whole vendor via `CONSORT_BACKEND=codex\|gemini\|pi` (Pi: any provider via `CONSORT_PI_PROVIDER`); several at once for review via `CONSORT_REVIEWERS` |
 
 Cross-vendor is the point: two model families don't share blind spots (in the SWE-chat
 4-tool study, 93.4% of issues were caught by exactly one tool). Every substantive
@@ -129,6 +129,7 @@ Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-dem
 | `scripts/consort-delegate.sh` | Hands the implementer one task as a five-part brief (goal, paths, constraints, definition of done, return format); result is schema-forced JSON, logged to `.consort/tasks/` |
 | `scripts/consort-consult.sh` | Read-only implementer with a schema: panel drafts, plan refutations, divergent questions |
 | `scripts/consort-review.sh` + `merge-findings.mjs` | The duet: both voices review the same diff blind; the merge surfaces what only one model caught |
+| `scripts/consort-panel.sh` | The panel: `consort-review.sh` once per leg of `CONSORT_REVIEWERS` (e.g. `codex,pi:google-vertex`), in parallel, one findings file per leg; a leg that fails or times out fails the panel; `merge-findings.mjs` takes all the legs at once |
 | `scripts/consort-scan.sh` + `scan-to-findings.mjs` | Model-free scanner tier: Trivy (vulns, secrets, misconfig) and SonarQube (when a server is configured), converted into the shared findings schema |
 | `scripts/consort-gate.sh` | Model-free verdict — code: tests green; documents: sources untouched, claims traced |
 | `schemas/` | One shared shape per artifact type (`spec`, `findings`, `task-result`) is what makes two vendors comparable and machine-mergeable |
@@ -142,6 +143,40 @@ non-Anthropic by construction, so either satisfies the cross-vendor axis when
 the principal is Claude; `pi` reaches whichever provider `CONSORT_PI_PROVIDER`
 names and refuses `anthropic` unless you state the principal is not Claude.
 `scripts/consort-backend.sh` is the dispatcher the caller scripts source.
+
+### Panel — more than one reviewer per diff (`CONSORT_REVIEWERS`)
+
+`CONSORT_BACKEND` picks one backend for everything. A review gate that wants
+two vendors' readings on every diff — not "whichever is reachable" — runs
+`scripts/consort-panel.sh [base]` instead of `consort-review.sh` directly.
+It reads `CONSORT_REVIEWERS` (comma-separated legs, default `codex`), runs
+`consort-review.sh` once per leg in parallel, each under its own backend env,
+and writes one findings file per leg into `CONSORT_PANEL_DIR` (default: a
+fresh temp dir, kept). Leg grammar: `codex[:model]`, `gemini[:model]`,
+`pi[:provider[:model]]` — so `codex,pi:google-vertex` is the Codex CLI plus
+Gemini 3.1 Pro through Pi, and `codex,gemini,pi:openai-codex:gpt-5.6-sol`
+is three legs. A leg that pins a provider but no model unsets any ambient
+`CONSORT_PI_MODEL`, so the provider's own default applies.
+
+The manifest on stdout (`{"dir","exit","legs":[{label,spec,backend,model,
+status,exit,seconds,file}]}`) says what each leg did; every leg's stderr is
+relayed with a `[label]` prefix, which is where the backends' evidence lines
+(tool calls, tokens, served model) land. A leg that fails, returns nothing,
+or runs past `CONSORT_PANEL_TIMEOUT` (default 1800 s; the whole process group
+is killed) makes the panel exit 3 with that leg's file empty — the other legs'
+results stay on disk, but the panel you configured did not run, and the
+gate's rule is hard-fail, never degrade. An all-excluded diff propagates as
+exit 4. Stale files for this run's legs are removed before it starts, so a
+previous run can never read as this one's verdict.
+
+`merge-findings.mjs` takes any number of files (`<yours.json> <leg.json>...`,
+labels from the basenames or `label=path`) and clusters findings across all
+of them by file and line proximity: **caught by more than one reviewer**
+first (tagged `[claude+codex+pi-google-vertex]`), then each reviewer's
+**only** section — the second-opinion payoff — then the principal's. A file
+that is missing, empty or not a findings array is reported as **NO RESULT**
+in the report and exits 3: a leg that did not run and a leg that found
+nothing never look the same.
 
 ### `CONSORT_BACKEND=codex` (default) — OpenAI
 
@@ -246,7 +281,14 @@ Extracted results are validated against the schema; `{}` and
 
 Auth is Pi's own (`pi auth check --provider <id>`); Vertex reads
 `GOOGLE_APPLICATION_CREDENTIALS` / ADC plus `GOOGLE_CLOUD_PROJECT` and
-`GOOGLE_CLOUD_LOCATION`. `CONSORT_PI_STDERR` captures Pi's stderr (owner-only).
+`GOOGLE_CLOUD_LOCATION`. For google providers the consort-scoped names are
+honoured too and win when set, exported to the Pi process only:
+`CONSORT_GCP_PROJECT`, `CONSORT_GEMINI_LOCATION` (the gemini backend's
+variables) and `CONSORT_GCP_CREDENTIALS` (a service-account key file; must
+be readable or the backend refuses to start rather than fall through to
+whatever ADC the shell holds). That is how a machine whose user ADC is an
+hourly-expiring workforce token keeps a Gemini leg alive from static config.
+`CONSORT_PI_STDERR` captures Pi's stderr (owner-only).
 
 Delegation entries in `.consort/log.jsonl` record which backend + model served
 each task.
