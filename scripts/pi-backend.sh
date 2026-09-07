@@ -272,6 +272,9 @@ consort_pi_call() {
     echo "consort: pi workdir does not exist: $workdir" >&2
     : > "$out"; return 0
   fi
+  # Absolute, symlink-free: the fence anchors on this string from inside the
+  # workdir, where a relative path would resolve to the wrong place.
+  workdir="$(cd "$workdir" && pwd -P)" || { : > "$out"; return 0; }
 
   local flags=(--provider "$p" --model "$m" --thinking "$(_consort_pi_thinking)")
   case "$mode" in
