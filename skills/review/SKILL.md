@@ -1,7 +1,7 @@
 ---
 name: review
 description: Cross-model orchestration between Claude Code and a local Codex CLI. Claude orchestrates, plans, and reviews; Codex implements and provides an independent second opinion. Use when you want two different model families to cross-check work rather than one model reviewing itself.
-version: 0.5.0
+version: 0.6.0
 ---
 
 # review — cross-model review (Claude + Codex)
@@ -59,27 +59,46 @@ stated, graded, answered across rounds, and re-checked after fixes; and
 
 ## Review loop (`/consort:review`)
 
-1. Read the built-in packs in `"$CLAUDE_PLUGIN_ROOT"/rules/`; then, if
-   `CONSORT_RULE_PACKS` is set, every pack it names — otherwise a repo-local
-   `.claude/rules/` directory if present (the script resolves packs the same
-   way, so both reviewers read the same set).
-2. Run the blast-surface sweep (`rules/blast-surface.md`) on the target diff:
-   inventory what changed lifecycle, grep its consumers, hunt removed implicit
-   behavior, check runtime contracts. Findings from the sweep are findings like
-   any other. Do not skip it for small diffs.
-3. Run the scanner tier: `bash "$CLAUDE_PLUGIN_ROOT"/scripts/consort-scan.sh`
+The principal's own reading of the diff does NOT happen in this session. It
+runs in the plugin's `code-reviewer` agent — non-inheriting, no shell, the
+same shape as the security side-agent — for two reasons. Independence: a
+reviewer who watched the change being made reads intent, not code. Cost: a
+review pass is 30 to 40 tool calls, and every one of them re-reads the whole
+session it runs in; at the context sizes an authoring session reaches, that
+pass alone was most of a review's bill (measured: the security side-agent
+does its whole pass in ~110k tokens over 19 to 32 calls). Your job here is
+to gather the mechanical evidence, spawn the readers, merge, verify, present.
+
+1. Resolve the pack paths: the built-in packs in `"$CLAUDE_PLUGIN_ROOT"/rules/`;
+   then, if `CONSORT_RULE_PACKS` is set, every pack it names — otherwise a
+   repo-local `.claude/rules/` directory if present (`consort-review.sh`
+   resolves packs the same way, so every reader gets the same set). Pass the
+   paths on; do not read the packs into this session.
+2. Write the exact diff under review to a temp file — the same diff for
+   uncommitted, staged, or branch-vs-base targets, with the same
+   `CONSORT_DIFF_EXCLUDE` the panel applies. Both agents read this file and
+   never regenerate it.
+3. Run the scanner tier: `bash "$CLAUDE_PLUGIN_ROOT"/scripts/consort-scan.sh > <dir>/scan.json`
    (Trivy, plus SonarQube when a server is configured — see
-   `rules/security-review.md`). Capture its stdout findings and repeat every
-   SKIPPED line from stderr in the review output; triage each scanner finding
-   for reachability per the pack. Only the principal runs this — a read-only
-   cross-reviewer states it could not scan and defers.
-4. Run the project's own test suite and compare against a pre-change baseline
-   on the same machine; any new failure is a finding. If the suite cannot run,
-   say so explicitly in the review output instead of silently omitting it.
-5. Produce your own findings on the target diff, in `schemas/findings.schema.json`
-   shape (`file, line, severity, title, detail`), applying the packs.
-   Write to a temp JSON file.
-6. In parallel, get the independent passes:
+   `rules/security-review.md`). Repeat every SKIPPED line from stderr in the
+   review output; triage each scanner finding for reachability per the pack.
+   Only the principal runs this — a read-only cross-reviewer states it could
+   not scan and defers.
+4. Run the test suite through `bash "$CLAUDE_PLUGIN_ROOT"/scripts/consort-test.sh [base]`
+   (blast-surface step 5). It runs the suite for head and for a worktree of
+   the base ref, keeps both logs on disk, and prints one summary line plus
+   the NEW failures and the run directory — that is all of it that belongs
+   in this context; do not `cat` the logs. Exit 1 = new failures (findings);
+   exit 2 = the suite did not run; exit 3 = head ran but the baseline could
+   not — say so in the review output, never fold either into "tests green".
+   Trusted diffs only: the suite executes the diff's code.
+5. In parallel, get the independent passes:
+   - **Principal reader:** spawn the plugin's `code-reviewer` agent
+     (non-inheriting — never a context-forking spawn) with the workdir, the
+     diff file path, the pack paths, and the `result.json` path from step 4.
+     It runs the blast-surface sweep with repo access, turns each new test
+     failure into a finding, and returns the findings schema. Save its JSON
+     as `claude.json`: this is the "Claude only" column of the merge.
    - **Cross-vendor reviewer(s):** `bash "$CLAUDE_PLUGIN_ROOT"/scripts/consort-panel.sh [base]`
      runs `consort-review.sh` once per leg of `CONSORT_REVIEWERS` (default
      `codex`; e.g. `codex,pi:google-vertex` for Codex plus Gemini through
@@ -91,20 +110,22 @@ stated, graded, answered across rounds, and re-checked after fixes; and
      file was excluded: nothing was reviewed, do not merge. Check each leg's `seconds` and
      its relayed `[label]` stderr evidence line (tool calls, tokens, served
      model) — a multi-hundred-line diff reviewed in seconds did not happen.
-   - **Security side-agent:** write the exact diff under review to a temp
-     file (same diff for uncommitted, staged, or branch-vs-base targets),
-     then spawn the plugin's `security-reviewer` agent (non-inheriting —
-     never a context-forking spawn) with the workdir, that diff file path,
-     and the rule pack paths. The agent has no shell by design and never
-     regenerates the diff itself. It reviews security classes only and
-     returns the same findings schema. Same vendor as you, different
-     context: it covers the independence axis the duet's cross-vendor pass
-     doesn't need, and it reads the diff without your authoring assumptions.
-7. Merge: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json <dir>/codex.json [<dir>/pi-google-vertex.json ...]`
+   - **Security side-agent:** spawn the plugin's `security-reviewer` agent
+     (non-inheriting — never a context-forking spawn) with the workdir, the
+     same diff file path, and the rule pack paths. The agent has no shell by
+     design and never regenerates the diff itself. It reviews security
+     classes only and returns the same findings schema. Same vendor as you,
+     different context: it covers the independence axis the duet's
+     cross-vendor pass doesn't need, and it reads the diff without your
+     authoring assumptions.
+   Each agent's return is a findings JSON of at most a few hundred lines;
+   that, the panel manifest, and the scan and test summaries are the whole
+   of what this step adds to your context.
+6. Merge: `node "$CLAUDE_PLUGIN_ROOT"/scripts/merge-findings.mjs claude.json <dir>/codex.json [<dir>/pi-google-vertex.json ...]`
    — every leg file the manifest lists. Exit 3 from the merge means a file
    was empty or not a findings array (NO RESULT in the report): a failed leg,
    not a clean one.
-8. Present in this order: **Caught by more than one reviewer** (act first),
+7. Present in this order: **Caught by more than one reviewer** (act first),
    each reviewer's **only** section (what you missed, the real payoff),
    **Claude only** (no cross-vendor reviewer caught), then **Security agent**
    (side-agent findings; fold one into a duet finding only when it names the
@@ -113,7 +134,9 @@ stated, graded, answered across rounds, and re-checked after fixes; and
    **Scanners** (the deterministic tier from step 3, with your reachability
    verdicts). Verify each cross-model or side-agent finding
    before treating it as real; a second model's finding is a lead, not a verdict.
-9. Grade, answer, and (when fixes touch guards, teardown, or concurrency paths)
+   Verify by reading the named range, not the file: this session is the
+   expensive one, and it is at its largest right here.
+8. Grade, answer, and (when fixes touch guards, teardown, or concurrency paths)
    re-check per `rules/finding-discipline.md`: the fix pass is part of the
    review, not a new review.
 

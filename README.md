@@ -114,11 +114,27 @@ required; every skipped scanner is reported loudly, never silently. Rule-based
 scanners and model reviewers catch nearly disjoint defect sets — that
 zero-overlap is why both tiers run.
 
-**Security side-agent:** the plugin also ships an `agents/security-reviewer`
-subagent — a blind, security-only reviewer the review loop spawns in parallel
-with the cross-vendor pass. It inherits no session context, so it reads the
-diff without the author's assumptions; its findings merge as their own column
-and are verified like any cross-model lead.
+**Two blind agents on the Claude side:** the plugin ships `agents/code-reviewer`
+and `agents/security-reviewer`, both spawned by the review loop in parallel
+with the cross-vendor pass, both non-inheriting and shell-less. The
+code-reviewer is the principal's own column — it runs the blast-surface sweep
+with repo access and returns the findings the authoring session would
+otherwise have produced in place. Since 0.10.0 the authoring session does not
+review the diff itself: a review pass is 30 to 40 tool calls, each re-reading
+the whole session it runs in, so at a 200k–400k authoring context that one
+pass was most of a review's token bill (the side-agent does its pass in ~110k
+tokens over 19 to 32 calls; the principal's pass was never instrumented
+because it had no boundary to instrument). The security-reviewer covers
+security classes only and reads the same diff file. Both return the shared
+findings schema, merge as their own columns, and are verified like any
+cross-model lead.
+
+**Tests out of context:** `scripts/consort-test.sh [base]` runs the project's
+suite for head and for a worktree of the base ref, keeps both logs on disk,
+and prints one summary line plus the *new* failures. That summary is all the
+review session sees; the code-reviewer agent turns each new failure into a
+finding from the `result.json` it leaves behind. Exit 2 (did not run) and 3
+(no baseline) are reported as such, never as green.
 
 Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-demo`
 
@@ -131,6 +147,8 @@ Bootstrap a throwaway playground: `bash scripts/consort-demo.sh /tmp/consort-dem
 | `scripts/consort-review.sh` + `merge-findings.mjs` | The duet: both voices review the same diff blind; the merge surfaces what only one model caught |
 | `scripts/consort-panel.sh` | The panel: `consort-review.sh` once per leg of `CONSORT_REVIEWERS` (e.g. `codex,pi:google-vertex`), in parallel, one findings file per leg; a leg that fails or times out fails the panel; `merge-findings.mjs` takes all the legs at once |
 | `scripts/consort-scan.sh` + `scan-to-findings.mjs` | Model-free scanner tier: Trivy (vulns, secrets, misconfig) and SonarQube (when a server is configured), converted into the shared findings schema |
+| `scripts/consort-test.sh` | Model-free test tier: the suite on head and on a worktree of the base ref, logs on disk, one summary line and the new failures on stdout, `result.json` for the code-reviewer agent |
+| `agents/code-reviewer`, `agents/security-reviewer` | The Claude-side readers: non-inheriting, shell-less, fed a diff file and the pack paths, returning findings JSON — the principal's column and the security column |
 | `scripts/consort-gate.sh` | Model-free verdict — code: tests green; documents: sources untouched, claims traced |
 | `schemas/` | One shared shape per artifact type (`spec`, `findings`, `task-result`) is what makes two vendors comparable and machine-mergeable |
 | `.consort/` | The state bus: every phase resumes from disk; the session dying loses nothing |

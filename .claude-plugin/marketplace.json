@@ -9,7 +9,7 @@
     {
       "name": "consort",
       "description": "Claude orchestrates and reviews; Codex (gpt-5.6) or Gemini (Vertex AI) implements and cross-reviews. Surfaces the findings only one model caught.",
-      "version": "0.9.1",
+      "version": "0.10.0",
       "source": "./",
       "category": "productivity",
       "tags": [
@@ -21,5 +21,5 @@
       ]
     }
   ],
-  "version": "0.9.1"
+  "version": "0.10.0"
 }
