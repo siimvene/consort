@@ -14,16 +14,31 @@
 #
 # Modes:
 #   read-only       — tools limited to read,grep,find,ls; no user extensions,
-#                     skills or prompt templates (non-inheriting context, like
-#                     Codex's --ignore-user-config); project-local .pi files
-#                     ignored (--no-approve) so a hostile repo cannot load an
-#                     extension into its own reviewer. Repo AGENTS.md/CLAUDE.md
-#                     stay in: that is the repo's own context, which Codex reads too.
+#                     skills, prompt templates or context files (non-inheriting,
+#                     like Codex's --ignore-user-config); project-local .pi
+#                     files ignored (--no-approve). Context files are OFF here on
+#                     purpose: Pi folds the workdir's AGENTS.md/CLAUDE.md — and
+#                     every ancestor directory's, up to / — into the SYSTEM
+#                     prompt, and Pi's read/grep/find are not fenced to the
+#                     workdir (absolute paths and ~ resolve), so a hostile repo's
+#                     AGENTS.md could steer the reviewer at anything the user can
+#                     read. The rule packs the caller injects are the reviewer's
+#                     brief; a repo that wants house rules in the review puts them
+#                     in .claude/rules, which consort-review.sh fences as data.
 #   workspace-write — full built-in tool set (read,bash,edit,write,grep,find,ls),
-#                     Pi's default resource discovery. Pi has no OS sandbox: the
-#                     tool allowlist and the workdir are the only fences, as with
-#                     the gemini cli transport's --yolo. Same blast radius, same
-#                     caution.
+#                     Pi's default discovery of the repo's context files and the
+#                     user's extensions/skills; project-local .pi resources are
+#                     still ignored (--no-approve): .pi/settings.json can set
+#                     shellPath/shellCommandPrefix and .pi/extensions run code at
+#                     startup, and a trust entry on a PARENT folder would apply
+#                     it to every repo below. Pi has no OS sandbox: the tool
+#                     allowlist and the workdir are the only fences, as with the
+#                     gemini cli transport's --yolo. Same blast radius, same caution.
+#
+# Every run is --offline (no pi.dev version check / install telemetry) and
+# needs ripgrep and fd resolvable up front: Pi's grep/find tools otherwise
+# download an unpinned, unverified "latest" binary from GitHub on first use,
+# which is not something a review should do on a fresh host.
 #
 # Public API (mirrors codex-backend.sh / gemini-backend.sh):
 #   consort_pi_backend   prints "pi" if usable, else fails.
@@ -61,6 +76,11 @@ _consort_pi_thinking() { echo "${CONSORT_PI_THINKING:-high}"; }
 consort_pi_backend() {
   command -v pi >/dev/null || { echo "consort: pi backend needs the pi CLI (@earendil-works/pi-coding-agent) on PATH" >&2; return 1; }
   command -v python3 >/dev/null || { echo "consort: pi backend needs python3" >&2; return 1; }
+  local t
+  for t in rg fd; do
+    command -v "$t" >/dev/null 2>&1 || [ -x "$HOME/.pi/agent/bin/$t" ] \
+      || { echo "consort: pi backend needs '$t' on PATH (ripgrep/fd) — Pi would otherwise fetch an unpinned binary from GitHub on first use; install it first" >&2; return 1; }
+  done
   echo "pi"; return 0
 }
 
@@ -76,6 +96,7 @@ _consort_pi_unwrap() {
 import json, sys
 want_p, want_m = sys.argv[1], sys.argv[2]
 assistants, served, tools, final_text, errors = 0, set(), 0, None, []
+served_response = set()
 usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0}
 cost = 0.0
 saw_any = False
@@ -99,6 +120,13 @@ for line in sys.stdin:
             continue
         assistants += 1
         served.add((m.get("provider"), m.get("model")))
+        # provider/model above are Pi's client-side echo of its own config.
+        # Adapters that surface the server's answer (responseModel, OpenAI
+        # completions today) get it checked too: it must name the requested
+        # model, allowing a dated suffix (gpt-5.6-sol -> gpt-5.6-sol-2026-09-01).
+        rm = m.get("responseModel")
+        if rm:
+            served_response.add(rm)
         u = m.get("usage") or {}
         for k in usage:
             usage[k] += u.get(k, 0) or 0
@@ -120,10 +148,16 @@ if served != {(want_p, want_m)}:
     print(f"consort: pi run was served by {sorted(f'{p}/{m}' for p, m in served)} where only the requested "
           f"{want_p}/{want_m} was allowed — model swap, not a result; discarded", file=sys.stderr)
     sys.exit(2)
+bad = sorted(r for r in served_response if not (r == want_m or r.startswith(want_m + "-") or r.endswith("/" + want_m)))
+if bad:
+    print(f"consort: provider reported serving {bad} where the requested {want_m} was expected — "
+          "server-side substitution, not a result; discarded", file=sys.stderr)
+    sys.exit(2)
 if errors:
     print(f"consort: pi marked the run failed ({errors[-1]}); result discarded", file=sys.stderr)
     sys.exit(2)
-print(f"consort: pi {want_p}/{want_m} — {assistants} turns, {tools} tool calls, {usage['input']} input tokens "
+srv = f", served as {sorted(served_response)[0]}" if served_response else ""
+print(f"consort: pi {want_p}/{want_m}{srv} — {assistants} turns, {tools} tool calls, {usage['input']} input tokens "
       f"({usage['cacheRead']} cached), {usage['reasoning']} reasoning tokens, {usage['output']} output tokens, "
       f"${cost:.4f}", file=sys.stderr)
 sys.stdout.write(final_text or "")
@@ -165,7 +199,7 @@ _consort_pi_run() {
   (
     umask 077
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
-    pi -p --mode json --no-session "$@" 2>>"${CONSORT_PI_STDERR:-/dev/null}"
+    pi -p --mode json --no-session --offline "$@" 2>>"${CONSORT_PI_STDERR:-/dev/null}"
   )
 }
 
@@ -194,16 +228,15 @@ consort_pi_call() {
   local flags=(--provider "$p" --model "$m" --thinking "$(_consort_pi_thinking)")
   case "$mode" in
     read-only)
-      flags+=(--tools read,grep,find,ls --no-extensions --no-skills --no-prompt-templates --no-themes --no-approve) ;;
+      flags+=(--tools read,grep,find,ls --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve) ;;
     workspace-write)
-      flags+=(--tools read,bash,edit,write,grep,find,ls) ;;
+      flags+=(--tools read,bash,edit,write,grep,find,ls --no-approve) ;;
     *) echo "consort: pi backend: unknown mode '$mode'" >&2; : > "$out"; return 0 ;;
   esac
 
   # The caller's instructions ARE the system prompt (Pi's default coding
-  # prompt is for an interactive assistant, not a structured reviewer);
-  # context files and skills still append per Pi's contract. The payload and
-  # the output contract travel as the user message on stdin.
+  # prompt is for an interactive assistant, not a structured reviewer). The
+  # payload and the output contract travel as the user message on stdin.
   local prompt
   prompt="$(
     if [ -n "$payload" ]; then printf '<stdin>\n'; cat "$payload"; printf '\n</stdin>\n\n'; fi
