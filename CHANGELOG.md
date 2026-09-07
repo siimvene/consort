@@ -8,20 +8,30 @@ still in 0.x.
 ## [0.7.0] — 2026-09-07
 
 ### Changed
-- **Codex exec transport runs `--ignore-user-config` by default**, reasoning
-  effort pinned via `CONSORT_CODEX_REASONING` (default `high`). The reviewer
-  no longer inherits `~/.codex/config.toml` plugins, plugin hooks, MCP servers
-  or `developer_instructions`. Measured on a 25-file diff: a stock config whose
-  oh-my-codex prompt hook matched "parallel mode" inside a rule pack fanned the
-  review into three subagents and re-prompted from its Stop hook — 10.7M input
-  tokens, 909 s; the bypass reviewed the same diff in 2.46M tokens, 495 s, with
-  the same real findings. `CONSORT_CODEX_ARGS` replaces the default (empty
-  string = stock config).
-- **Diff path excludes in `consort-review.sh`.** Lockfiles and minified bundles
-  are left out of the payload by default (`CONSORT_DIFF_EXCLUDE`, colon-
-  separated git pathspec globs; empty string reviews everything). Excluded
-  files are listed on stderr and told to the reviewer; an all-excluded diff
-  says so instead of passing as clean.
+- **Codex exec transport runs read-only calls with `--ignore-user-config`**,
+  reasoning effort pinned via `CONSORT_CODEX_REASONING` (default `high`). The
+  reviewer no longer inherits `~/.codex/config.toml` plugins, plugin hooks,
+  MCP servers or `developer_instructions`. Measured on a 25-file diff: a stock
+  config whose oh-my-codex prompt hook matched "parallel mode" inside a rule
+  pack fanned the review into three subagents and re-prompted from its Stop
+  hook — 10.7M input tokens, 909 s; the bypass reviewed the same diff in 2.46M
+  tokens, 495 s, with the same real findings. Workspace-write (delegation)
+  keeps the user config, where sandbox narrowing and approval policy live;
+  `CONSORT_CODEX_USER_CONFIG=1` keeps it for read-only calls too. A CLI
+  without the flag falls back to the stock config with a stderr warning.
+  (Gate: a free-form `CONSORT_CODEX_ARGS` passthrough was dropped before
+  release — env-supplied argv after `-s` could have revoked the sandbox.)
+
+### Added
+- **Opt-in diff path excludes in `consort-review.sh`** (`CONSORT_DIFF_EXCLUDE`,
+  colon-separated git pathspec globs matched from the repo root) for repos
+  that commit generated artefacts. Nothing is excluded by default: lockfiles
+  stay in, as the supply-chain rule requires. Excluded paths are listed on
+  stderr and handed to the reviewer as fenced data; an all-excluded diff
+  exits 4 instead of passing as clean. The diff is now taken from the repo
+  root (`:/`) regardless of the caller's cwd.
+- `CONSORT_GEMINI_STDERR`: file to append the Gemini CLI's stderr to
+  (created owner-only; dropped by default).
 
 ### Fixed
 - **Gemini cli transport reviewed diff-only.** Headless `gemini` made zero
@@ -37,11 +47,9 @@ still in 0.x.
   mode passes through as literal text.
 - **Gemini api probe false negative.** `consort_gemini_probe` capped output at
   16 tokens, which a thinking model spends on thoughts (`finishReason:
-  MAX_TOKENS`, empty text), so a live backend read as dead. Cap raised to 256.
-
-### Added
-- `CONSORT_GEMINI_STDERR`: file to append the Gemini CLI's stderr to (dropped
-  by default).
+  MAX_TOKENS`, empty text), so a live backend read as dead. Cap raised to 256
+  and any candidate with a `finishReason` now counts as alive — the probe
+  proves reachability, auth and quota, nothing more.
 
 ## [0.6.0] — 2026-09-04
 

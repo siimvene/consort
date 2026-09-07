@@ -76,7 +76,10 @@ consort_gemini_probe() {
     curl -s -X POST "$host/v1/projects/$proj/locations/$loc/publishers/google/models/$(_consort_gemini_model):generateContent" \
       -H "Authorization: Bearer $tok" -H "x-goog-user-project: $proj" -H "Content-Type: application/json" \
       -d '{"contents":[{"role":"user","parts":[{"text":"Reply with exactly: GEMINI_ALIVE"}]}],"generationConfig":{"maxOutputTokens":256}}' \
-      2>/dev/null | grep -o 'GEMINI_ALIVE' | head -1
+      2>/dev/null | grep -o 'GEMINI_ALIVE\|"finishReason"' | head -1 | sed 's/.*/GEMINI_ALIVE/'
+    # A candidate with any finishReason (even MAX_TOKENS, which a thinking
+    # model can hit before writing a word) proves reachability, auth and quota,
+    # which is all a liveness probe is for.
   fi
 }
 
@@ -163,9 +166,11 @@ consort_gemini_call() {
   # Prompt (with a possibly large diff) goes on STDIN, not a -p arg, to avoid
   # ARG_MAX on big diffs. `cd || exit` aborts the subshell on a bad workdir
   # instead of running gemini in the wrong place.
+  # The stderr capture file can carry auth diagnostics: create it owner-only.
   local raw
   raw="$(
     cd "$workdir" || exit 0
+    umask 077
     printf '%s' "$prompt" | \
     GOOGLE_GENAI_USE_VERTEXAI=true \
     GOOGLE_CLOUD_PROJECT="$(_consort_gemini_project)" \

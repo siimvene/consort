@@ -94,13 +94,15 @@ repo; the plugin itself ships only vendor-neutral review methodology in its
 `rules/` directory (`blast-surface.md`, `finding-discipline.md`, and
 `security-review.md`, always injected since 0.4.0, no setup needed).
 
-**Diff excludes:** lockfiles and minified bundles (`*.lock`, `package-lock.json`,
-`pnpm-lock.yaml`, `yarn.lock`, `*.min.js`, `*.min.css`, `*.map`) are left out of
-the review payload by default — every diff byte is re-sent on every reviewer
-turn, and the scanner tier already covers dependency changes. Override with
-`CONSORT_DIFF_EXCLUDE` (colon-separated git pathspec globs; an empty string
-reviews everything). Exclusions are announced on stderr and to the reviewer,
-never applied silently.
+**Diff excludes (opt-in):** every diff byte is re-sent on every reviewer turn,
+so a repo that commits generated artefacts (baseline JSON, bundles) can name
+them in `CONSORT_DIFF_EXCLUDE` (colon-separated git pathspec globs, matched
+from the repo root). Nothing is excluded by default — lockfiles stay in,
+because the supply-chain rule in `security-review.md` needs the model to see
+dependency changes. Excluded paths are listed on stderr and handed to the
+reviewer as fenced data; a diff that is empty only because of excludes exits
+4, not 0. Whoever sets the variable owes the principal the same excludes, or
+the two sides stop reviewing the same diff.
 
 **Security scanners (optional):** when [Trivy](https://trivy.dev) is on PATH,
 `consort-scan.sh` adds a deterministic third voice to every review — dependency
@@ -155,17 +157,21 @@ Reaches Codex through one of two transports, resolved by `scripts/codex-backend.
 Auto-resolution prefers the plugin when installed; force either with
 `CONSORT_CODEX_BACKEND=plugin|exec`.
 
-The exec transport runs `codex exec --ignore-user-config` with reasoning effort
-pinned (`CONSORT_CODEX_REASONING`, default `high`): the reviewer sees none of
-your `~/.codex/config.toml` plugins, hooks, MCP servers or developer
-instructions, which keeps its context non-inheriting and its bill proportional
-to the diff. Measured 2026-09-07 on a 25-file diff: a stock config whose plugin
-hook matched "parallel mode" in a rule pack fanned the review into three
-subagents (10.7M input tokens, 15 min); the bypass ran the same review in 2.46M
-tokens and 8 min with the same real findings. `CONSORT_CODEX_ARGS` (whitespace-
-split `codex exec` flags) replaces that default; set it to an empty string to
-run with your stock config. The plugin transport uses the plugin runtime's own
-config and takes no flags.
+For read-only calls (review, consult) the exec transport runs
+`codex exec --ignore-user-config` with reasoning effort pinned
+(`CONSORT_CODEX_REASONING`, default `high`): the reviewer sees none of your
+`~/.codex/config.toml` plugins, hooks, MCP servers or developer instructions,
+which keeps its context non-inheriting and its bill proportional to the diff.
+Measured 2026-09-07 on a 25-file diff: a stock config whose plugin hook
+matched "parallel mode" in a rule pack fanned the review into three subagents
+(10.7M input tokens, 15 min); the bypass ran the same review in 2.46M tokens
+and 8 min with the same real findings. Workspace-write (delegation) keeps
+your config, because that is where sandbox narrowing and approval policy
+live. `CONSORT_CODEX_USER_CONFIG=1` keeps it for read-only calls too — needed
+where `config.toml` carries something the reviewer cannot run without, such
+as a `[windows]` sandbox selector. A Codex CLI without the flag falls back
+to the stock config with a warning on stderr. The plugin transport uses the
+plugin runtime's own config.
 
 ### `CONSORT_BACKEND=gemini` — Google (Vertex AI)
 
