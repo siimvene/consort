@@ -19,10 +19,19 @@ still in 0.x.
   served-model attestation is native: a run served by anything but the
   requested provider/model pair, or one Pi marked failed, is discarded as a
   failed call; every call prints one stderr evidence line (turns, tool
-  calls, tokens, cached, reasoning, cost). Read-only calls are
-  non-inheriting (`--tools read,grep,find,ls`, no user extensions/skills/
-  templates, `--no-approve`); workspace-write gets the full tool set. Pi has
-  no OS sandbox — the tool allowlist and the workdir are the fences.
+  calls, tokens, cached, reasoning, cost); the server-reported
+  `responseModel` is checked too where an adapter surfaces it. Read-only
+  calls are non-inheriting (`--tools read,grep,find,ls`, no user
+  extensions/skills/templates, `--no-context-files`, `--no-approve`):
+  Pi folds the workdir's and every ancestor's `AGENTS.md`/`CLAUDE.md` into
+  the system prompt and its read/grep/find are not workdir-fenced, so a
+  hostile checkout's context file must not reach the reviewer.
+  Workspace-write gets the full tool set and the repo's context files, with
+  `--no-approve` (`.pi/settings.json` `shellPath`, `.pi/extensions`). Every
+  run is `--offline`; the backend refuses to start unless `rg` and `fd` are
+  resolvable, because Pi's grep/find otherwise download an unpinned binary
+  from GitHub on first use. Pi has no OS sandbox — the tool allowlist and
+  the workdir are the fences.
 
 ## [0.7.1] — 2026-09-07
 

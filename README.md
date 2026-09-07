@@ -218,13 +218,22 @@ the provider, the model id and the usage that served it, so the served-model
 attestation the gemini cli transport had to bolt on is native here. Every
 call prints one stderr line (turns, tool calls, tokens, cached, reasoning,
 cost); a run served by any provider/model other than the requested pair is
-discarded as a failed call. Read-only calls run with `--tools read,grep,find,ls`,
-no user extensions, skills or prompt templates (non-inheriting, like Codex's
-`--ignore-user-config`) and `--no-approve` (a hostile repo cannot load a
-project-local extension into its own reviewer); repo `AGENTS.md`/`CLAUDE.md`
-stay in. Workspace-write gets the full built-in tool set and Pi's default
-discovery. Pi has no OS sandbox: the tool allowlist and the workdir are the
-fences, as with the gemini cli transport's `--yolo`.
+discarded as a failed call; where an adapter surfaces the server-reported
+model (`responseModel`), that is checked too. Read-only calls run with
+`--tools read,grep,find,ls`, no user extensions, skills, prompt templates or
+context files (non-inheriting, like Codex's `--ignore-user-config`) and
+`--no-approve`. Context files are off on purpose: Pi folds the workdir's
+`AGENTS.md`/`CLAUDE.md` and every ancestor directory's into the *system*
+prompt, and its read/grep/find are not fenced to the workdir, so a hostile
+checkout's context file could steer the reviewer at anything you can read.
+House rules for the review go in `.claude/rules`, which `consort-review.sh`
+fences as data. Workspace-write gets the full built-in tool set and the
+repo's context files, still with `--no-approve` (`.pi/settings.json` can set
+`shellPath`, `.pi/extensions` run at startup). Pi has no OS sandbox: the tool
+allowlist and the workdir are the fences, as with the gemini cli transport's
+`--yolo`. Every run is `--offline`, and the backend refuses to start unless
+`rg` and `fd` are already resolvable — Pi's grep/find tools otherwise fetch an
+unpinned "latest" binary from GitHub on first use.
 
 Auth is Pi's own (`pi auth check --provider <id>`); Vertex reads
 `GOOGLE_APPLICATION_CREDENTIALS` / ADC plus `GOOGLE_CLOUD_PROJECT` and
