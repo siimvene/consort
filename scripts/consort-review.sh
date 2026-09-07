@@ -19,6 +19,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODEL="${CONSORT_IMPL_MODEL:-gpt-5.6-sol}"
 SCHEMA="$ROOT/schemas/findings.schema.json"
 BASE="${1:-}"
+case "$BASE" in -*) echo "consort-review: base ref must not start with '-' (got '$BASE')" >&2; exit 2 ;; esac
 
 # Diff path excludes — OPT-IN. Every diff byte is re-sent on every reviewer
 # turn, so a repo that commits generated artefacts (baseline JSON, bundles)

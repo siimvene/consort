@@ -64,10 +64,22 @@
 #                            anthropic -> claude-opus-4-8)
 #      CONSORT_PI_THINKING  (default high; off|minimal|low|medium|high|xhigh|max)
 #      CONSORT_PI_STDERR    (file to append Pi's stderr to; dropped by default)
+#      CONSORT_PI_RAW       (file to append Pi's raw --mode json event stream to,
+#                            owner-only; the evidence when a run is discarded)
 #      CONSORT_PI_SAME_VENDOR_OK=1        allow provider=anthropic (principal is not Claude)
 #      CONSORT_PI_UNSANDBOXED_WRITE_OK=1  allow workspace-write (no OS sandbox)
 #      Provider auth is Pi's own: `pi auth check --provider <id>`; Vertex reads
 #      GOOGLE_APPLICATION_CREDENTIALS / ADC + GOOGLE_CLOUD_PROJECT/LOCATION.
+#      For google providers the consort-scoped names are honoured too, for
+#      the Pi process only (the caller's shell is never touched), and WIN over
+#      the ambient Google ones when set — they are the operator's explicit
+#      choice for consort runs, e.g. a service-account key on a machine whose
+#      user ADC is a workforce token that expires hourly:
+#        CONSORT_GCP_PROJECT      -> GOOGLE_CLOUD_PROJECT   (same var the gemini backend uses)
+#        CONSORT_GEMINI_LOCATION  -> GOOGLE_CLOUD_LOCATION  (same var the gemini backend uses)
+#        CONSORT_GCP_CREDENTIALS  -> GOOGLE_APPLICATION_CREDENTIALS (a readable file, or the
+#                                    backend refuses to start: a typo here must not fall
+#                                    through to whatever ADC the shell happens to hold)
 
 # Resolved at source time: BASH_SOURCE may be relative, and the runner cd's
 # into the workdir before it needs this path.
@@ -83,6 +95,30 @@ _consort_pi_model() {
   esac
 }
 _consort_pi_thinking() { echo "${CONSORT_PI_THINKING:-high}"; }
+# Resolve a capture-file setting to an absolute path that is safe to append
+# to, or fail. Prints /dev/null when unset. An existing path must be a regular
+# file we own, never a symlink (a hostile checkout could plant one at a
+# relative name; tee and >> both follow symlinks), and is made owner-only —
+# the stream holds the prompt, the diff and the model's output; the umask
+# only ever protected a file we created ourselves.
+_consort_pi_private_file() {
+  local f="$1" name="$2"
+  [ -n "$f" ] || { echo /dev/null; return 0; }
+  case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
+  if [ -L "$f" ] || { [ -e "$f" ] && { [ ! -f "$f" ] || [ ! -O "$f" ]; }; }; then
+    echo "consort: $name must be a regular file you own (not a symlink): $f" >&2; return 1
+  fi
+  [ -e "$f" ] || ( umask 077; : > "$f" ) || { echo "consort: cannot create $name: $f" >&2; return 1; }
+  chmod 600 "$f" 2>/dev/null || { echo "consort: cannot make $name owner-only: $f" >&2; return 1; }
+  echo "$f"
+}
+# Absolute, resolved against the CALLER's cwd: the runner cd's into the
+# workdir before exporting it, and a relative path re-resolved there could
+# name a repository-controlled file.
+_consort_pi_gcp_credentials() {
+  local c="${CONSORT_GCP_CREDENTIALS:-}"
+  case "$c" in ''|/*) echo "$c" ;; *) echo "$PWD/$c" ;; esac
+}
 
 # Oldest Pi whose flags and JSON event contract this backend was written and
 # tested against (--offline, --no-approve, --no-context-files, message_end
@@ -107,6 +143,16 @@ except Exception: sys.exit(1)' "$v" "$_CONSORT_PI_MIN_VERSION" \
     return 1
   fi
   _consort_pi_model >/dev/null || return 1
+  case "$(_consort_pi_provider)" in
+    google*)
+      if [ -n "${CONSORT_GCP_CREDENTIALS:-}" ]; then
+        local c; c="$(_consort_pi_gcp_credentials)"
+        if [ ! -f "$c" ] || [ ! -r "$c" ]; then
+          echo "consort: CONSORT_GCP_CREDENTIALS is set but not a readable regular file: $c" >&2
+          return 1
+        fi
+      fi ;;
+  esac
   # rg and fd (Debian ships fd as fdfind) on PATH, or already in Pi's own bin
   # (PI_CODING_AGENT_DIR overrides ~/.pi/agent).
   local pidir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" t alt
@@ -172,6 +218,8 @@ for line in sys.stdin:
             final_text = "\n".join(texts)
         if m.get("stopReason") in ("error", "aborted"):
             errors.append(f"stopReason={m.get('stopReason')}")
+        elif m.get("stopReason") in ("length", "max_tokens"):
+            errors.append("stopReason=length (output truncated at the token limit; the final JSON cannot be complete)")
 if not saw_any:
     print("consort: pi produced no JSON event stream — cannot prove which model ran; result discarded", file=sys.stderr)
     sys.exit(2)
@@ -238,7 +286,8 @@ def check(v, sc, path='$'):
     return errs
 t=sys.stdin.read()
 s=t.find('{')
-if s<0: sys.exit(1)
+if s<0:
+    print('consort: pi final message contains no JSON object (%d chars of text); not a result' % len(t), file=sys.stderr); sys.exit(1)
 d=0; instr=False; esc=False; e=-1
 for i in range(s,len(t)):
     c=t[i]
@@ -252,7 +301,8 @@ for i in range(s,len(t)):
     elif c=='}':
         d-=1
         if d==0: e=i; break
-if e<0: sys.exit(1)
+if e<0:
+    print('consort: pi final message has an unbalanced JSON object (%d chars from the first brace) — truncated output?; not a result' % (len(t)-s), file=sys.stderr); sys.exit(1)
 o=json.loads(t[s:e+1])
 errs=check(o,schema)
 if errs:
@@ -272,15 +322,23 @@ _consort_pi_run() {
   # Create it owner-only, then run Pi under the user's own umask: a umask
   # around the whole process would also make every file the implementer
   # writes 0600.
-  local errf="${CONSORT_PI_STDERR:-/dev/null}"
-  case "$errf" in /*) ;; *) errf="$PWD/$errf" ;; esac
-  [ "$errf" = /dev/null ] || ( umask 077; : >> "$errf" ) || return 1
+  local errf rawf
+  errf="$(_consort_pi_private_file "${CONSORT_PI_STDERR:-}" CONSORT_PI_STDERR)" || return 1
+  rawf="$(_consort_pi_private_file "${CONSORT_PI_RAW:-}" CONSORT_PI_RAW)" || return 1
+  local creds; creds="$(_consort_pi_gcp_credentials)"
   (
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
+    # Consort-scoped Google settings, exported for this Pi process only.
+    case "$(_consort_pi_provider)" in
+      google*)
+        [ -z "${CONSORT_GCP_PROJECT:-}" ]     || export GOOGLE_CLOUD_PROJECT="$CONSORT_GCP_PROJECT"
+        [ -z "${CONSORT_GEMINI_LOCATION:-}" ] || export GOOGLE_CLOUD_LOCATION="$CONSORT_GEMINI_LOCATION"
+        [ -z "$creds" ] || export GOOGLE_APPLICATION_CREDENTIALS="$creds" ;;
+    esac
     # The fence extension (pi-fence.mjs) is loaded explicitly on every run;
     # --no-extensions in read-only disables DISCOVERY only, -e paths still load.
     CONSORT_PI_WORKDIR="${workdir:-$PWD}" CONSORT_PI_MODE="${CONSORT_PI_MODE:-read-only}" \
-    pi -p --mode json --no-session --offline -e "$_CONSORT_PI_FENCE" "$@" 2>>"$errf"
+    pi -p --mode json --no-session --offline -e "$_CONSORT_PI_FENCE" "$@" 2>>"$errf" | tee -a "$rawf"
   )
 }
 
@@ -315,6 +373,21 @@ consort_pi_call() {
   # Absolute, symlink-free: the fence anchors on this string from inside the
   # workdir, where a relative path would resolve to the wrong place.
   workdir="$(cd "$workdir" && pwd -P)" || { : > "$out"; return 0; }
+  # A credential file INSIDE the workdir is readable through the fence (the
+  # fence allows the workdir) — a repo rule could have the reviewer read the
+  # key and send it to the provider. Refuse it in every mode; both the
+  # consort-scoped and the ambient Google variable are checked.
+  case "$p" in google*)
+    local cf cfr
+    for cf in "$(_consort_pi_gcp_credentials)" "${GOOGLE_APPLICATION_CREDENTIALS:-}"; do
+      [ -n "$cf" ] || continue
+      cfr="$(cd "$(dirname "$cf")" 2>/dev/null && pwd -P)/$(basename "$cf")" || cfr="$cf"
+      case "$cfr" in "$workdir"|"$workdir"/*)
+        echo "consort: refusing a Google credentials file inside the workdir ($cf): the reviewer could read it" >&2
+        : > "$out"; return 0 ;;
+      esac
+    done ;;
+  esac
 
   local flags=(--provider "$p" --model "$m" --thinking "$(_consort_pi_thinking)")
   case "$mode" in
@@ -329,6 +402,16 @@ consort_pi_call() {
         echo "consort: pi workspace-write runs with NO sandbox (bash/edit/write, whole filesystem); set CONSORT_PI_UNSANDBOXED_WRITE_OK=1 to accept that, or delegate through the codex backend" >&2
         : > "$out"; return 0
       fi
+      # A long-lived service-account key must not sit in the environment of a
+      # child that has an unfenced shell: one repo-injected `cat` and it is in
+      # the model's output. Read-only is fine (the fence refuses bash and any
+      # read outside the workdir); here, use ADC or a short-lived token.
+      case "$p" in google*)
+        if [ -n "${CONSORT_GCP_CREDENTIALS:-}" ] || [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+          echo "consort: refusing a credentials key file (CONSORT_GCP_CREDENTIALS / GOOGLE_APPLICATION_CREDENTIALS) for a workspace-write pi run — bash is unfenced there; unset both and use ADC / a short-lived token for delegation" >&2
+          : > "$out"; return 0
+        fi ;;
+      esac
       flags+=(--tools read,bash,edit,write,grep,find,ls --no-approve) ;;
     *) echo "consort: pi backend: unknown mode '$mode'" >&2; : > "$out"; return 0 ;;
   esac

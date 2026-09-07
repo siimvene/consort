@@ -102,7 +102,7 @@ Instruments (one observable per phase — if it can't be inspected, it isn't don
 - Spec → `.consort/spec.md` shows ≥2 vendor drafts scored + a synthesis with attribution.
 - Plan → `.consort/tasks.json` non-empty; refutation notes present.
 - Implement → branch has commits authored via sol; each task's tests green.
-- Review → `.consort/review.md` shows both-agree / model-only buckets, a
+- Review → `.consort/review.md` shows caught-by-more-than-one-reviewer / per-reviewer-only / principal-only buckets, a
   Security agent section (blind side-agent findings), and a Scanners section
   (or the scan's explicit SKIPPED lines); `.consort/scan.json` exists.
 - Gate → CI exits 0.
