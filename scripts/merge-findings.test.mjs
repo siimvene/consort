@@ -76,6 +76,32 @@ const section = (out, title) => {
   const r = run(c, x, p);
   expect('span rule stops chaining', r.stdout.includes('Caught by more than one reviewer (1)') && r.stdout.includes('### pi only (1)'));
 }
+// 3c. same defect, different anchors: a title that names the other finding's file clusters (kvart PR #18 shape)
+{
+  const c = write('claude.json', []);
+  const x = write('codex.json', [F('deploy/install_timers.sh', 16, 'medium', 'Deleting timer files does not retire already-installed systemd units')]);
+  const p = write('pi.json', [F('deploy/kvart-task@auto_pay_vendors.timer', 1, 'medium', 'install_timers.sh does not remove systemd timers, causing run.py to crash')]);
+  const r = run(c, x, p);
+  const both = section(r.stdout, 'Caught by more than one reviewer (1)');
+  expect('cross-file: title naming the other file clusters', !!both && both.includes('[codex+pi; cross-file: deploy/install_timers.sh, deploy/kvart-task@auto_pay_vendors.timer]'));
+  expect('cross-file: no leftover only sections', r.stdout.includes('### codex only (0)') && r.stdout.includes('### pi only (0)'));
+  // a short generic basename in a title is not a link
+  const x2 = write('codex2.json', [F('src/kvart/tasks/run.py', 40, 'low', 'run.py exits 2 on an unknown job name')]);
+  const r2 = run(c, x2, p);
+  expect('cross-file: short basename (run.py) does not cluster', r2.stdout.includes('Caught by more than one reviewer (0)'));
+  // but a path segment does
+  const p2 = write('pi2.json', [F('deploy/x.timer', 1, 'low', 'timer keeps invoking tasks/run.py with a removed job')]);
+  const r3 = run(c, x2, p2);
+  expect('cross-file: path segment in title clusters', r3.stdout.includes('Caught by more than one reviewer (1)'));
+  // one reviewer, two findings that name each other: still two findings
+  const x3 = write('codex3.json', [F('deploy/install_timers.sh', 16, 'medium', 'A'), F('deploy/kvart-task@auto_pay_vendors.timer', 1, 'low', 'install_timers.sh never prunes this')]);
+  const r4 = run(c, `codex=${x3}`, write('empty.json', []));
+  expect('cross-file: never merges two findings of the same reviewer', r4.stdout.includes('### codex only (2)'));
+  // a detail mentioning the file is not enough
+  const p3 = write('pi3.json', [{ file: 'deploy/kvart-task@auto_pay_vendors.timer', line: 1, severity: 'low', title: 'Timer unit is deleted', detail: 'install_timers.sh should prune it' }]);
+  const r5 = run(c, x, p3);
+  expect('cross-file: a mention only in detail does not cluster', r5.stdout.includes('Caught by more than one reviewer (0)'));
+}
 // 4. label=path syntax
 {
   const c = write('mine.json', [F('a.py', 1, 'low', 'A')]);

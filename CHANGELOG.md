@@ -5,6 +5,22 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.9.1] — 2026-09-07
+
+### Fixed
+- **`merge-findings.mjs` clusters the same defect anchored on different
+  files.** Two reviewers can pin one defect to two files — one on the script
+  that fails to prune, the other on the unit file being deleted — and
+  file+line clustering showed it as two "only" findings, understating
+  agreement (measured on kvart PR #18: the panel's union was reported as
+  1 agreed + 2 "only" where it was 2 agreed). A finding now also joins a
+  cluster when its title names another member's file (last two path
+  segments, or a bare basename of at least 8 characters, so `run.py` in a
+  title is not a link); the detail is not used because it routinely lists
+  neighbours, and word overlap was rejected because the real case shared one
+  content word. Such clusters are tagged `cross-file:` with every file they
+  span. One reviewer's two findings never merge, as before.
+
 ## [0.9.0] — 2026-09-07
 
 ### Added

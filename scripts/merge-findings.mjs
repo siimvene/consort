@@ -57,30 +57,66 @@ const PROXIMITY = 5; // same file + lines within this many rows => the same find
 const rank = { critical: 0, high: 1, medium: 2, low: 3 };
 const sevRank = (f) => rank[sev(f)] ?? 9;
 
+// Two reviewers can anchor the SAME defect on different files: one on the
+// script that fails to prune, the other on the unit file being deleted
+// (measured on kvart PR #18: file+line clustering showed one defect as two
+// "only" findings). Cross-file match: a finding's TITLE names the other
+// finding's file. Titles are short and deliberate, so a file named there is
+// the subject, not a passing mention; the detail is not used because it
+// routinely lists neighbours. Short generic basenames (run.py, index.ts)
+// would match too easily, so a bare basename must be at least MIN_BASENAME
+// characters; a title that carries a path segment (tasks/run.py) matches on
+// the last two segments at any length. Word overlap was tried and rejected:
+// the real case shared one content word.
+const MIN_BASENAME = 8;
+const fileKeys = (file) => {
+  const parts = String(file ?? '').toLowerCase().split('/').filter(Boolean);
+  const keys = [];
+  if (parts.length >= 2) keys.push(parts.slice(-2).join('/'));
+  const base = parts[parts.length - 1] ?? '';
+  if (base.length >= MIN_BASENAME) keys.push(base);
+  return keys;
+};
+const titleNamesFile = (f, otherFile) => {
+  const t = String(f.title ?? '').toLowerCase();
+  return fileKeys(otherFile).some((k) => t.includes(k));
+};
+const sameDefectAcrossFiles = (a, b) =>
+  norm(a.file) !== norm(b.file) && (titleNamesFile(a, b.file) || titleNamesFile(b, a.file));
+
 // Greedy clustering across all sets, in argument order. A finding joins the
-// first cluster in the same file whose full line span, with the new member
-// included, stays within PROXIMITY, and that has no member from its own set
-// yet (two findings from one reviewer are two findings, never one). The span
-// rule stops chaining: lines 10, 15 and 20 are two clusters, not one that
-// spans twice the proximity. Bucketing by line would split findings that
-// straddle a bucket boundary (e.g. line 42 vs 44), so the match is pairwise.
+// first cluster that has no member from its own set yet (two findings from
+// one reviewer are two findings, never one) and either (a) has members in
+// the same file whose full line span, with the new member included, stays
+// within PROXIMITY — the span rule stops chaining: lines 10, 15 and 20 are
+// two clusters, not one that spans twice the proximity; bucketing by line
+// would split findings that straddle a bucket boundary (e.g. 42 vs 44), so
+// the match is pairwise — or (b) has a member that names this finding's
+// file in its title, or whose file this finding's title names (cross-file).
 const clusters = [];
+const sameFileNear = (cl, f, line) => {
+  const same = cl.members.filter((m) => norm(m.f.file) === norm(f.file));
+  if (!same.length) return false;
+  const lines = same.map((m) => Number(m.f.line) || 0);
+  return Math.max(...lines, line) - Math.min(...lines, line) <= PROXIMITY;
+};
 for (const s of sets) {
   for (const f of s.findings ?? []) {
     const line = Number(f.line) || 0;
     const c = clusters.find((cl) =>
       !cl.sources.has(s.label) &&
-      cl.file === norm(f.file) &&
-      Math.max(cl.max, line) - Math.min(cl.min, line) <= PROXIMITY);
-    if (c) { c.sources.add(s.label); c.members.push({ src: s.label, f }); c.min = Math.min(c.min, line); c.max = Math.max(c.max, line); }
-    else clusters.push({ file: norm(f.file), sources: new Set([s.label]), members: [{ src: s.label, f }], min: line, max: line });
+      (sameFileNear(cl, f, line) || cl.members.some((m) => sameDefectAcrossFiles(m.f, f))));
+    if (c) { c.sources.add(s.label); c.members.push({ src: s.label, f }); }
+    else clusters.push({ sources: new Set([s.label]), members: [{ src: s.label, f }] });
   }
 }
 // Representative = the most severe member (ties: earliest set); tags list
-// every reviewer that caught it.
+// every reviewer that caught it, and a cross-file cluster says so, with
+// every file it spans, so the reader can see why two anchors became one.
 for (const c of clusters) {
   c.rep = c.members.reduce((best, m) => (sevRank(m.f) < sevRank(best.f) ? m : best), c.members[0]).f;
-  c.tag = [...c.sources].join('+');
+  const files = [...new Set(c.members.map((m) => clean(m.f.file)))];
+  c.tag = [...c.sources].join('+') + (files.length > 1 ? `; cross-file: ${files.join(', ')}` : '');
 }
 
 const bySeverity = (a, b) => sevRank(a.rep) - sevRank(b.rep);
