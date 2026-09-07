@@ -6,6 +6,10 @@
 #
 #   CONSORT_BACKEND=codex   (default) — OpenAI via the Codex CLI / plugin runtime.
 #   CONSORT_BACKEND=gemini            — Google via the Gemini CLI / Vertex API.
+#   CONSORT_BACKEND=pi                — any vendor via the Pi coding agent
+#                                       (CONSORT_PI_PROVIDER picks it; with the
+#                                       principal on Claude, `anthropic` is
+#                                       same-vendor and does not satisfy the gate).
 #
 # This file is the single entry point the caller scripts source; it forwards to
 # the selected backend's implementation (codex-backend.sh / gemini-backend.sh),
@@ -22,6 +26,7 @@
 _consort_backend_dir() { cd "$(dirname "${BASH_SOURCE[0]}")" && pwd; }
 . "$(_consort_backend_dir)/codex-backend.sh"
 . "$(_consort_backend_dir)/gemini-backend.sh"
+. "$(_consort_backend_dir)/pi-backend.sh"
 
 _consort_selected() { echo "${CONSORT_BACKEND:-codex}"; }
 
@@ -29,13 +34,15 @@ consort_backend() {
   case "$(_consort_selected)" in
     codex)  consort_codex_backend ;;
     gemini) consort_gemini_backend ;;
-    *) echo "consort: unknown CONSORT_BACKEND '$(_consort_selected)' (expected codex|gemini)" >&2; return 1 ;;
+    pi)     consort_pi_backend ;;
+    *) echo "consort: unknown CONSORT_BACKEND '$(_consort_selected)' (expected codex|gemini|pi)" >&2; return 1 ;;
   esac
 }
 
 consort_impl_model() {
   case "$(_consort_selected)" in
     gemini) echo "${CONSORT_GEMINI_MODEL:-gemini-3.1-pro-preview}" ;;
+    pi)     echo "$(_consort_pi_provider)/$(_consort_pi_model)" ;;
     *)      echo "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" ;;
   esac
 }
@@ -43,14 +50,16 @@ consort_impl_model() {
 consort_impl_call() {
   case "$(_consort_selected)" in
     gemini) consort_gemini_call "$@" ;;
+    pi)     consort_pi_call "$@" ;;
     codex)  consort_codex_call "$@" ;;
-    *) echo "consort: unknown CONSORT_BACKEND '$(_consort_selected)' (expected codex|gemini)" >&2; return 1 ;;
+    *) echo "consort: unknown CONSORT_BACKEND '$(_consort_selected)' (expected codex|gemini|pi)" >&2; return 1 ;;
   esac
 }
 
 consort_impl_probe() {
   case "$(_consort_selected)" in
     gemini) consort_gemini_probe ;;
+    pi)     consort_pi_probe ;;
     # codex has no dedicated probe; a caller that needs one can `codex exec`.
     *) command -v codex >/dev/null && codex exec -m "$(consort_impl_model)" \
          "Reply with exactly: CODEX_ALIVE" 2>/dev/null | grep -o 'CODEX_ALIVE' | head -1 ;;

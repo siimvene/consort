@@ -5,6 +5,25 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.8.0] — 2026-09-07
+
+### Added
+- **Pi backend — any vendor through one CLI, chosen with
+  `CONSORT_BACKEND=pi`.** Reaches the Pi coding agent
+  (`@earendil-works/pi-coding-agent`): Anthropic, OpenAI (API key or the
+  ChatGPT/Codex subscription OAuth), Google Vertex (ADC / service-account
+  key) and ~25 more providers behind one headless `--mode json` protocol.
+  `CONSORT_PI_PROVIDER` picks the vendor (default `openai-codex`),
+  `CONSORT_PI_MODEL` the model, `CONSORT_PI_THINKING` the effort. Every
+  assistant message Pi emits names its provider, model and usage, so the
+  served-model attestation is native: a run served by anything but the
+  requested provider/model pair, or one Pi marked failed, is discarded as a
+  failed call; every call prints one stderr evidence line (turns, tool
+  calls, tokens, cached, reasoning, cost). Read-only calls are
+  non-inheriting (`--tools read,grep,find,ls`, no user extensions/skills/
+  templates, `--no-approve`); workspace-write gets the full tool set. Pi has
+  no OS sandbox — the tool allowlist and the workdir are the fences.
+
 ## [0.7.1] — 2026-09-07
 
 ### Fixed

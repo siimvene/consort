@@ -200,6 +200,36 @@ a swap is a failed call, not a verdict. The same envelope prints one stderr
 line per call (tool calls, input/cached/thought/output tokens), which is the
 "did the reviewer really run" check without opening the session log.
 
+### `CONSORT_BACKEND=pi` — any vendor via the Pi coding agent
+
+One CLI, every vendor. [Pi](https://github.com/badlogic/pi-mono)
+(`@earendil-works/pi-coding-agent`) is a minimal multi-provider coding agent:
+Anthropic (Pro/Max OAuth or key), OpenAI (API key or the ChatGPT/Codex
+subscription OAuth), Google Vertex (ADC or a service-account key, no API key)
+and ~25 more, all behind one headless JSON-lines protocol. `CONSORT_PI_PROVIDER`
+picks the vendor (default `openai-codex`), `CONSORT_PI_MODEL` the model
+(defaults per provider: `gpt-5.6-sol`, `gemini-3.1-pro-preview`,
+`claude-opus-4-8`), `CONSORT_PI_THINKING` the effort (`high`). Whether a Pi run
+is cross-vendor depends on the provider, not on Pi: with the principal on
+Claude, `anthropic` never satisfies the gate.
+
+Why it earns a backend of its own: every assistant message Pi emits carries
+the provider, the model id and the usage that served it, so the served-model
+attestation the gemini cli transport had to bolt on is native here. Every
+call prints one stderr line (turns, tool calls, tokens, cached, reasoning,
+cost); a run served by any provider/model other than the requested pair is
+discarded as a failed call. Read-only calls run with `--tools read,grep,find,ls`,
+no user extensions, skills or prompt templates (non-inheriting, like Codex's
+`--ignore-user-config`) and `--no-approve` (a hostile repo cannot load a
+project-local extension into its own reviewer); repo `AGENTS.md`/`CLAUDE.md`
+stay in. Workspace-write gets the full built-in tool set and Pi's default
+discovery. Pi has no OS sandbox: the tool allowlist and the workdir are the
+fences, as with the gemini cli transport's `--yolo`.
+
+Auth is Pi's own (`pi auth check --provider <id>`); Vertex reads
+`GOOGLE_APPLICATION_CREDENTIALS` / ADC plus `GOOGLE_CLOUD_PROJECT` and
+`GOOGLE_CLOUD_LOCATION`. `CONSORT_PI_STDERR` captures Pi's stderr (owner-only).
+
 Delegation entries in `.consort/log.jsonl` record which backend + model served
 each task.
 
