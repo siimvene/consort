@@ -19,8 +19,20 @@ still in 0.x.
   names the home that ran. A home list forces the exec transport (the
   plugin broker is pinned to one account) and refuses an explicit
   `CONSORT_CODEX_BACKEND=plugin`. Delegation fails over only when the
-  limited attempt left the git work tree unchanged. The Codex probe walks
+  limited attempt did no work at all (no item in codex's event stream), so
+  a half-applied edit or a leftover background process never reaches a
+  second account. Keyring-backed logins (no `auth.json`) are recognised via
+  `codex login status`. Only error events and a work-item count are kept
+  from the stream; the transcript never touches disk. The Codex probe walks
   the same list. Tests: `scripts/codex-backend.test.sh` (stub codex).
+- Hardened by the gate on this change (Codex, Gemini via Pi, blind security
+  agent): the first cut fingerprinted the work tree with `git add -A` in a
+  throwaway index, which ran the repo's `core.fsmonitor`, wrote untracked
+  files into `.git/objects` and missed edits to ignored files; replaced by
+  the no-work rule above. A malformed Termscape `settings.json` no longer
+  echoes its offending line (it can hold an API key); a refused call clears
+  a stale result file; the walk and the probe survive a caller's
+  `set -euo pipefail` without `|| true`.
 
 ### Fixed
 - `codex exec` calls without a payload and the Codex probe now read stdin

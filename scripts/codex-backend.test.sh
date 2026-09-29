@@ -15,6 +15,11 @@ unset CODEX_HOME CONSORT_CODEX_HOMES CONSORT_CODEX_BACKEND CONSORT_TERMSCAPE_DAT
 cat > "$T/bin/codex" <<'STUB'
 #!/usr/bin/env bash
 # stub codex: behaviour from $CODEX_HOME/behave; logs every exec it serves.
+if [ "${1:-} ${2:-} ${3:-}" = "login status " ]; then
+  # keyring-backed login: no auth.json, a marker file stands in for the keyring
+  [ -e "${CODEX_HOME:-$HOME/.codex}/keyring" ] && { echo "Logged in using ChatGPT"; exit 0; }
+  echo "Not logged in"; exit 1
+fi
 [ "${1:-}" = exec ] || exit 2
 case " $* " in *" --help "*) echo "  --ignore-user-config"; exit 0 ;; esac
 home="${CODEX_HOME:-$HOME/.codex}"
@@ -34,7 +39,10 @@ case "$(cat "$home/behave")" in
   fail)           echo '{"type":"turn.failed","error":{"message":"invalid_request_error: bad schema"}}'; exit 1 ;;
   fail-transcript) echo '{"type":"item.completed","item":{"type":"agent_message","text":"this code greps for usage limit and rate limit strings"}}'
                   echo '{"type":"turn.failed","error":{"message":"stream disconnected"}}'; exit 1 ;;
+  limit-notice)   echo '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata not found"}}'
+                  echo '{"type":"turn.failed","error":{"message":"usage limit"}}'; exit 1 ;;
   limit-edit)     echo half > "$wd/half-applied.txt"
+                  echo '{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"SECRET_IN_TRANSCRIPT"}}'
                   echo '{"type":"turn.failed","error":{"message":"usage limit"}}'; exit 1 ;;
 esac
 STUB
@@ -69,6 +77,12 @@ check "failover: B result kept" 'grep -q "from b" "$OUT"'
 check "failover: A reported at limit" 'grep -q "account 1/2 is at its usage limit" "$ERR"'
 check "failover: B reported as the runner" 'grep -q "account 2/2 ran the call" "$ERR"'
 check "failover: payload reached B too" '[ "$(cat "$T/b/stdin.seen")" = "the diff" ]'
+
+# 2b. the walk survives a caller's errexit + pipefail with no `|| true`
+( set -euo pipefail; CONSORT_CODEX_HOMES="$T/a:$T/b" consort_codex_call read-only "$SCHEMA" "$T" review "$T/out-e" "$PAYLOAD" 2>/dev/null; echo reached > "$T/errexit-ok" )
+check "errexit caller: failover completes" '[ -e "$T/errexit-ok" ] && grep -q "from b" "$T/out-e"'
+mkhome f fail
+check "failover: exit status reported" 'CONSORT_CODEX_HOMES="$T/a:$T/f:$T/b" consort_codex_call read-only "$SCHEMA" "$T" review "$T/out-s" "$PAYLOAD" 2>&1 >/dev/null | grep -q "(exit 1)"'
 
 # 3. limit via stderr and via a 429 API error also fail over
 mkhome s limit-stderr; mkhome r ratelimit-429
@@ -120,21 +134,33 @@ check "@termscape: pending and malformed ids skipped" '[ "$(grep -c . "$STUB_LOG
 check "@termscape: landed on acct-2" 'grep -q "account 3/3 ran the call" "$ERR"'
 CONSORT_TERMSCAPE_DATA_DIR="$T/none" CONSORT_CODEX_HOMES=@termscape call read-only
 check "@termscape without Termscape: system account only, warned" '[ "$(cat "$STUB_LOG")" = "$HOME/.codex" ] && grep -q "no Termscape settings" "$ERR"'
+mkdir -p "$T/badts"; printf '{\n "modelGateway": {"apiKey": "sk-FAKE-SECRET", oops}\n}\n' > "$T/badts/settings.json"
+CONSORT_TERMSCAPE_DATA_DIR="$T/badts" CONSORT_CODEX_HOMES=@termscape call read-only
+check "@termscape: malformed settings do not echo their content" '! grep -q "sk-FAKE" "$ERR" && grep -q "could not read" "$ERR"' "$(cat "$ERR")"
 echo ok > "$HOME/.codex/behave"
 
-# 9. workspace-write: fail over only when the limited attempt left the tree untouched
-WD="$T/wd"; mkdir -p "$WD"; git -C "$WD" init -q; echo x > "$WD/f"; git -C "$WD" add f
-git -C "$WD" -c user.email=t@t -c user.name=t commit -qm init
+# 9. workspace-write: fail over only when the limited attempt did no work
+WD="$T/wd"; mkdir -p "$WD"
 CONSORT_CODEX_HOMES="$T/a:$T/b" call workspace-write "$WD"
-check "write, untouched tree: fails over" 'grep -q "from b" "$OUT"' "$(cat "$ERR")"
+check "write, refused before any work: fails over" 'grep -q "from b" "$OUT"' "$(cat "$ERR")"
+mkhome n limit-notice
+CONSORT_CODEX_HOMES="$T/n:$T/b" call workspace-write "$WD"
+check "write, only an error notice item: still fails over" 'grep -q "from b" "$OUT"' "$(cat "$ERR")"
 mkhome e limit-edit
 CONSORT_CODEX_HOMES="$T/e:$T/b" call workspace-write "$WD"
-check "write, edited tree: stops, B never called" '[ "$(cat "$STUB_LOG")" = "$T/e" ] && [ ! -s "$OUT" ]' "$(cat "$STUB_LOG")"
-check "write, edited tree: says why" 'grep -q "not failing over a workspace-write call" "$ERR"'
+check "write, work started: stops, B never called" '[ "$(cat "$STUB_LOG")" = "$T/e" ] && [ ! -s "$OUT" ]' "$(cat "$STUB_LOG")"
+check "write, work started: says why" 'grep -q "had already started work (1 items)" "$ERR"'
+check "read-only, work started: still fails over" 'CONSORT_CODEX_HOMES="$T/e:$T/b" call read-only && grep -q "from b" "$OUT"'
+check "transcript never reaches stderr" '! grep -q SECRET_IN_TRANSCRIPT "$ERR"'
 rm -f "$WD/half-applied.txt"
-NG="$T/nogit"; mkdir -p "$NG"
-CONSORT_CODEX_HOMES="$T/a:$T/b" call workspace-write "$NG"
-check "write outside git: no failover" '[ "$(cat "$STUB_LOG")" = "$T/a" ]' "$(cat "$STUB_LOG")"
+
+# 9b. keyring-backed login (no auth.json) is accepted; a stale out is cleared
+mkdir -p "$T/kr"; : > "$T/kr/keyring"; echo ok > "$T/kr/behave"
+CONSORT_CODEX_HOMES="$T/kr" call read-only
+check "keyring login accepted" 'grep -q "from kr" "$OUT"' "$(cat "$ERR")"
+echo '{"stale":true}' > "$T/out-stale"
+CONSORT_CODEX_BACKEND=plugin CONSORT_CODEX_HOMES="$T/b" consort_codex_call read-only "$SCHEMA" "$T" review "$T/out-stale" 2>/dev/null
+check "refused call clears a stale result" '[ ! -s "$T/out-stale" ]'
 
 # 10. transport: a home list forces exec; explicit plugin + homes is refused
 mkdir -p "$HOME/.claude/plugins/cache/m/codex/1.0.0/scripts"; : > "$HOME/.claude/plugins/cache/m/codex/1.0.0/scripts/codex-companion.mjs"
@@ -146,5 +172,7 @@ check "plugin + homes refused" '! CONSORT_CODEX_BACKEND=plugin CONSORT_CODEX_HOM
 mkhome p alive
 check "probe: limited A, alive B" '[ "$(CONSORT_CODEX_HOMES=$T/a:$T/p consort_codex_probe 2>/dev/null)" = CODEX_ALIVE ]'
 check "probe: all limited prints nothing" '[ -z "$(CONSORT_CODEX_HOMES=$T/a:$T/c consort_codex_probe 2>/dev/null)" ]'
+( set -euo pipefail; CONSORT_CODEX_HOMES="$T/a:$T/f" consort_codex_probe >/dev/null 2>&1; echo reached > "$T/probe-errexit" )
+check "probe + error lines survive errexit/pipefail" '[ -e "$T/probe-errexit" ]'
 
 echo; [ "$fails" -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

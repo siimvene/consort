@@ -39,9 +39,12 @@
 #   whatever CODEX_HOME the first caller had and serves every later call on
 #   that account. So a home list forces exec, and an explicit
 #   CONSORT_CODEX_BACKEND=plugin with a home list is refused.
-#   workspace-write calls fail over only when the limited attempt left the
-#   workdir byte-identical (a git tree hash before/after, untracked files
-#   included); a half-applied edit is never handed to a second account.
+#   workspace-write calls fail over only when the limited attempt did no work
+#   at all (no item in codex's event stream: no command, no file change, no
+#   message) — the usual case, an account already at its limit, is refused on
+#   the first request. Anything that started work stops the walk, so a
+#   half-applied edit or a leftover background process is never handed to a
+#   second account.
 #   Evidence on stderr, one line per attempt: which home ran and how it ended.
 #
 # Public API (used by consort-consult.sh / consort-delegate.sh / consort-review.sh):
@@ -116,7 +119,10 @@ _consort_termscape_homes() {
   node - "$data" "${NODETERM_CX_ROOT:-$HOME/.nodeterm/cx}" <<'NODE' || echo "consort: @termscape: could not read $(_consort_tilde "$data")/settings.json; using the system account only" >&2
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
 const [data, root] = process.argv.slice(2);
-const s = JSON.parse(fs.readFileSync(path.join(data, "settings.json"), "utf8"));
+// A parse error must not reach stderr: node echoes the offending source line,
+// and this file carries secrets (a gateway API key). Exit quietly instead.
+let s;
+try { s = JSON.parse(fs.readFileSync(path.join(data, "settings.json"), "utf8")); } catch { process.exit(1); }
 for (const a of Array.isArray(s.codexAccounts) ? s.codexAccounts : []) {
   if (!a || a.pending || typeof a.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(a.id)) continue;
   const d = crypto.createHash("sha256").update(data).update("\0").update(a.id).digest("hex").slice(0, 16);
@@ -142,7 +148,9 @@ _consort_codex_homes() {
     esac
     while IFS= read -r cand; do
       [ -n "$cand" ] || continue
-      if [ ! -f "$cand/auth.json" ]; then
+      # auth.json is the file store; a keyring-backed login has none, so
+      # ask codex itself before skipping.
+      if [ ! -f "$cand/auth.json" ] && ! { [ -d "$cand" ] && CODEX_HOME="$cand" codex login status </dev/null >/dev/null 2>&1; }; then
         echo "consort: skipping Codex home without a login: $(_consort_tilde "$cand")" >&2; continue
       fi
       real="$(cd "$cand" && pwd -P)" || continue
@@ -163,20 +171,20 @@ _consort_codex_limited() {
 }
 
 _consort_codex_error_lines() {
-  LC_ALL=C grep -E '^\{"type":"(error|turn\.failed)"' "$1" 2>/dev/null | head -2 | cut -c1-300 | sed 's/^/consort:   /'
+  { LC_ALL=C grep -E '^\{"type":"(error|turn\.failed)"' "$1" 2>/dev/null || true; } | head -2 | cut -c1-300 | sed 's/^/consort:   /'
 }
 
-# Fingerprint of the whole work tree, untracked files included (.gitignore
-# respected): a tree hash built in a throwaway index. Fails outside git.
-_consort_codex_tree_fp() {
-  local wd="$1" idx tmp fp
-  git -C "$wd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
-  idx="$(git -C "$wd" rev-parse --path-format=absolute --git-path index 2>/dev/null)" || return 1
-  tmp="$(mktemp)" || return 1
-  cp "$idx" "$tmp" 2>/dev/null || rm -f "$tmp"
-  fp="$(GIT_INDEX_FILE="$tmp" git -C "$wd" add -A >/dev/null 2>&1 && GIT_INDEX_FILE="$tmp" git -C "$wd" write-tree 2>/dev/null)"
-  rm -f "$tmp"
-  [ -n "$fp" ] && printf '%s' "$fp"
+# Reduces codex's --json stream to what the walk needs: the error events
+# verbatim, and one closing line counting the work items (commands, file
+# changes, messages, reasoning; error notices excluded). The rest of the
+# stream is the transcript (command output, repo content) and never touches
+# disk. Items stream as they start, so a codex that died with none did no
+# work; a missing count line (the filter itself killed) is treated as work.
+_consort_codex_event_filter() {
+  LC_ALL=C awk '
+    /^\{"type":"(error|turn\.failed)"/ { print; next }
+    /^\{"type":"item\./ && !/^\{"type":"item\.[a-z]+","item":\{"id":"[^"]*","type":"error"/ { n++ }
+    END { printf "{\"type\":\"consort.work\",\"items\":%d}\n", n }'
 }
 
 # _consort_codex_exec_accounts <mode> <workdir> <out> <payload> <codex argv...>
@@ -196,13 +204,16 @@ _consort_codex_exec_accounts() {
     : > "$out"; return 0
   fi
   local n; n="$(printf '%s\n' "$homes" | grep -c .)"
-  local ev err home rc t0 fp0 fp1 i=0
+  local ev err home rc t0 items i=0
   ev="$(mktemp)"; err="$(mktemp)"
   while IFS= read -r home <&3; do
-    i=$((i+1)); : > "$out"; fp0=""
-    [ "$mode" = "workspace-write" ] && fp0="$(_consort_codex_tree_fp "$workdir")"
+    i=$((i+1)); : > "$out"
     t0=$SECONDS
-    rc=0; CODEX_HOME="$home" "$@" < "$in" > "$ev" 2> "$err" || rc=$?
+    # Status goes through a file so the walk survives a caller's
+    # `set -euo pipefail` without a `|| true` around it.
+    { CODEX_HOME="$home" "$@" < "$in" 2> "$err"; printf '%s' "$?" > "$err.rc"; } \
+      | _consort_codex_event_filter > "$ev" || true
+    rc="$(cat "$err.rc" 2>/dev/null || echo '?')"
     if [ -s "$out" ]; then
       echo "consort: codex account $i/$n ran the call: $(_consort_tilde "$home") ($((SECONDS-t0))s)" >&2
       break
@@ -214,15 +225,15 @@ _consort_codex_exec_accounts() {
     fi
     echo "consort: codex account $i/$n is at its usage limit: $(_consort_tilde "$home")" >&2
     if [ "$mode" = "workspace-write" ]; then
-      fp1="$(_consort_codex_tree_fp "$workdir")"
-      if [ -z "$fp0" ] || [ "$fp0" != "$fp1" ]; then
-        echo "consort: not failing over a workspace-write call: $workdir changed during the limited attempt (or is not a git work tree) — inspect \`git status\` there first" >&2
+      items="$(sed -n 's/^{"type":"consort.work","items":\([0-9]*\)}$/\1/p' "$ev")"
+      if [ "${items:-x}" != 0 ]; then
+        echo "consort: not failing over a workspace-write call: the limited attempt had already started work (${items:-unknown} items) in $workdir — inspect \`git status\` there first" >&2
         break
       fi
     fi
     [ "$i" -lt "$n" ] || echo "consort: every Codex account in CONSORT_CODEX_HOMES is at its usage limit ($n tried)" >&2
   done 3<<< "$homes"
-  rm -f "$ev" "$err"
+  rm -f "$ev" "$err" "$err.rc"
   return 0
 }
 
@@ -234,7 +245,7 @@ consort_codex_probe() {
   _consort_codex_exec_accounts read-only "$PWD" "$out" "" \
     codex exec -m "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" -s read-only --skip-git-repo-check \
     --json -o "$out" "Reply with exactly: CODEX_ALIVE"
-  grep -o 'CODEX_ALIVE' "$out" | head -1
+  { grep -o 'CODEX_ALIVE' "$out" || true; } | head -1
   rm -f "$out"
 }
 
@@ -242,6 +253,9 @@ consort_codex_call() {
   local mode="${1:?mode required}" schema="${2:?schema required}" workdir="${3:?workdir required}"
   local sys="${4:?sys prompt required}" out="${5:?out-file required}" payload="${6:-}"
   local model="${CONSORT_IMPL_MODEL:-gpt-5.6-sol}"
+  # Empty first: a call refused below must not leave a previous run's result
+  # looking like this one's.
+  : > "$out"
   local backend; backend="$(consort_codex_backend)" || return 1
 
   if [ "$backend" = "exec" ]; then

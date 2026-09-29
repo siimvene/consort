@@ -270,16 +270,21 @@ panel's `[codex]` evidence says which account reviewed the diff.
   data dir and `NODETERM_CX_ROOT` at a non-default home root. A Claude node on
   the canvas does not inherit a Codex account, so without this list the
   codex leg always runs on `~/.codex`.
-- Homes without an `auth.json` are skipped with a warning; duplicates are
-  tried once; a leading `~/` is expanded.
+- Homes with neither an `auth.json` nor a keyring-backed login
+  (`codex login status`) are skipped with a warning; duplicates are tried
+  once; a leading `~/` is expanded.
 - A home list forces the **exec** transport: the plugin's broker is started
   once under the first caller's `CODEX_HOME` and serves every later call on
   that account, so it cannot switch. `CONSORT_CODEX_BACKEND=plugin` together
   with a home list is refused.
-- Delegation (workspace-write) fails over only when the limited attempt left
-  the work tree byte-identical (a git tree hash before and after, untracked
-  files included). A half-applied edit is never handed to a second account;
-  outside a git work tree delegation does not fail over at all.
+- Delegation (workspace-write) fails over only when the limited attempt did
+  no work at all: no item in codex's event stream (no command, no file
+  change, no message). That is the usual case, an account already at its
+  limit, refused on the first request. An attempt that started work stops
+  the walk, so a half-applied edit or a leftover background process is never
+  handed to a second account; inspect `git status` and rerun.
+- Only codex's error events and a count of work items are kept; the rest of
+  the `--json` stream (the transcript) never touches disk.
 - `consort_impl_probe` walks the same list and prints `CODEX_ALIVE` when some
   account answered.
 
