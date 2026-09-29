@@ -245,6 +245,53 @@ as a `[windows]` sandbox selector. A Codex CLI without the flag falls back
 to the stock config with a warning on stderr. The plugin transport uses the
 plugin runtime's own config.
 
+#### Several Codex accounts: `CONSORT_CODEX_HOMES`
+
+The Codex CLI keeps one login per `CODEX_HOME`. List several and a call
+walks them in order until one answers:
+
+```sh
+CONSORT_CODEX_HOMES='~/.codex:~/.codex-second'   # explicit homes
+CONSORT_CODEX_HOMES='@termscape'                 # every account Termscape signed in
+```
+
+A call moves to the next account **only** on a usage or rate limit, read from
+codex's own error events (`--json` `error` / `turn.failed`) and stderr, never
+from the transcript, so reviewing code that mentions "usage limit" cannot
+trip it. Any other failure stops the walk: a second account would fail the
+same way, and the review reports `DID NOT RUN` as before. Every attempt
+leaves one stderr line naming the home that ran (or hit its limit), so the
+panel's `[codex]` evidence says which account reviewed the diff.
+
+- `@default` is `${CODEX_HOME:-~/.codex}`. `@termscape` is Termscape's
+  (nodeterm) system account followed by each managed Codex account, at the
+  same `~/.nodeterm/cx/<hash>` home Termscape derives; pending accounts are
+  skipped. `CONSORT_TERMSCAPE_DATA_DIR` points at a non-default Termscape
+  data dir and `NODETERM_CX_ROOT` at a non-default home root. A Claude node on
+  the canvas does not inherit a Codex account, so without this list the
+  codex leg always runs on `~/.codex`.
+- Homes with neither an `auth.json` nor a keyring-backed login
+  (`codex login status`) are skipped with a warning; duplicates are tried
+  once; a leading `~/` is expanded.
+- A home list forces the **exec** transport: the plugin's broker is started
+  once under the first caller's `CODEX_HOME` and serves every later call on
+  that account, so it cannot switch. `CONSORT_CODEX_BACKEND=plugin` together
+  with a home list is refused.
+- Delegation (workspace-write) fails over only when the limited attempt did
+  no work at all: no item in codex's event stream (no command, no file
+  change, no message). That is the usual case, an account already at its
+  limit, refused on the first request. An attempt that started work stops
+  the walk, so a half-applied edit or a leftover background process is never
+  handed to a second account; inspect `git status` and rerun.
+- Only codex's error events and a count of work items are kept; the rest of
+  the `--json` stream (the transcript) never touches disk.
+- `consort_impl_probe` walks the same list and prints `CODEX_ALIVE` when some
+  account answered.
+
+Each run starts from the first home again, so a limited first account costs
+one refused call (seconds) per review until its window resets. Put the
+account with headroom first when you know which one it is.
+
 ### `CONSORT_BACKEND=gemini` — Google (Vertex AI)
 
 Reaches Gemini via ADC (`gcloud`/WIF), no API key, so it works where org policy

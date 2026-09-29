@@ -5,6 +5,41 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.11.0] — 2026-09-29
+
+### Added
+- **Codex account failover: `CONSORT_CODEX_HOMES`.** A `:`-separated list of
+  `CODEX_HOME` directories, one per Codex account, tried in order. A call
+  moves on only when codex reports a usage or rate limit in its own error
+  events or stderr (the exec transport now runs `--json`); the transcript is
+  never read for it. Any other failure stops the walk. `@default` and
+  `@termscape` expand to the inherited home and to every Codex account
+  Termscape (nodeterm) has signed in (system account, then
+  `~/.nodeterm/cx/<sha256(userData\0id)[:16]>`). One stderr line per attempt
+  names the home that ran. A home list forces the exec transport (the
+  plugin broker is pinned to one account) and refuses an explicit
+  `CONSORT_CODEX_BACKEND=plugin`. Delegation fails over only when the
+  limited attempt did no work at all (no item in codex's event stream), so
+  a half-applied edit or a leftover background process never reaches a
+  second account. Keyring-backed logins (no `auth.json`) are recognised via
+  `codex login status`. Only error events and a work-item count are kept
+  from the stream; the transcript never touches disk. The Codex probe walks
+  the same list. Tests: `scripts/codex-backend.test.sh` (stub codex).
+- Hardened by the gate on this change (Codex, Gemini via Pi, blind security
+  agent): the first cut fingerprinted the work tree with `git add -A` in a
+  throwaway index, which ran the repo's `core.fsmonitor`, wrote untracked
+  files into `.git/objects` and missed edits to ignored files; replaced by
+  the no-work rule above. A malformed Termscape `settings.json` no longer
+  echoes its offending line (it can hold an API key); a refused call clears
+  a stale result file; the walk and the probe survive a caller's
+  `set -euo pipefail` without `|| true`.
+
+### Fixed
+- `codex exec` calls without a payload and the Codex probe now read stdin
+  from `/dev/null`; before, a call with no payload could sit on "Reading
+  additional input from stdin..." when it inherited an open pipe that never
+  closed (a harness or a background job).
+
 ## [0.10.0] — 2026-09-08
 
 ### Changed
