@@ -138,6 +138,6 @@ else
   # own rule is hard-fail, never silently degrade — so say so, and exit non-zero
   # so a caller that checks status cannot mistake this for a review.
   echo 'consort-review: Codex returned no schema-conforming result — review DID NOT RUN.' >&2
-  echo 'consort-review: this is a FAILED gate, not a clean diff. Check `codex exec` reachability.' >&2
+  echo 'consort-review: this is a FAILED gate, not a clean diff. Check `codex exec` reachability (and, with CONSORT_CODEX_HOMES, the per-account lines above).' >&2
   exit 3
 fi

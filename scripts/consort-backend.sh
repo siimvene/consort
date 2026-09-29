@@ -60,8 +60,7 @@ consort_impl_probe() {
   case "$(_consort_selected)" in
     gemini) consort_gemini_probe ;;
     pi)     consort_pi_probe ;;
-    # codex has no dedicated probe; a caller that needs one can `codex exec`.
-    *) command -v codex >/dev/null && codex exec -m "$(consort_impl_model)" \
-         "Reply with exactly: CODEX_ALIVE" 2>/dev/null | grep -o 'CODEX_ALIVE' | head -1 ;;
+    # walks CONSORT_CODEX_HOMES like a real call (codex-backend.sh)
+    *) consort_codex_probe ;;
   esac
 }
