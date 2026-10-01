@@ -6,7 +6,7 @@
 
 A single Fable-orchestrated session that carries a feature from a one-line request to
 reviewed, gated code — pulling multiple model vendors into the phases where divergence
-pays (interview, spec, plan), delegating implementation to sol 5.6, and cross-reviewing
+pays (interview, spec, plan), delegating implementation to sol 6.1, and cross-reviewing
 the result. Fable holds the thread end to end; the human approves at gates, not between
 every step.
 
@@ -27,7 +27,7 @@ on whether the *orchestration* held, independent of how good the toy feature is.
 | Handle | Backing | Role |
 |---|---|---|
 | **Fable** | Claude Code on `claude-fable-5` | Principal: drives every phase, holds state, synthesizes, reviews. Cheap enough to run constantly; never writes bulk code. |
-| **sol** | `codex exec -m gpt-5.6-sol` | Workhorse: implements tasks (flat-rate quota), and is the second panel/review voice. |
+| **sol** | `codex exec -m gpt-6.1-sol` | Workhorse: implements tasks (flat-rate quota), and is the second panel/review voice. |
 
 The panel is exactly these two. Two different model families drafting blind is the
 cross-vendor divergence; synthesis is across the two drafts. More vendors is not a goal.

@@ -9,14 +9,14 @@
 #   consort-review.sh main         # review this branch vs origin/main..HEAD
 #
 # Env:
-#   CONSORT_IMPL_MODEL   codex model (default: gpt-5.6-sol)
+#   CONSORT_IMPL_MODEL   codex model (default: gpt-6.1-sol)
 #   CONSORT_RULE_PACKS   colon-separated files/dirs of .md/.mdc rule packs; injected
 #                        into the reviewer prompt so both sides review against the
 #                        same written standard (packs stay in the org's repo, not here)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODEL="${CONSORT_IMPL_MODEL:-gpt-5.6-sol}"
+MODEL="${CONSORT_IMPL_MODEL:-gpt-6.1-sol}"
 SCHEMA="$ROOT/schemas/findings.schema.json"
 BASE="${1:-}"
 case "$BASE" in -*) echo "consort-review: base ref must not start with '-' (got '$BASE')" >&2; exit 2 ;; esac

@@ -11,7 +11,7 @@ judgment calls, and never write bulk implementation code yourself — that goes 
 All phase state lives in `<workdir>/.consort/` so the run is resumable from disk.
 
 Scripts referenced below live under `$CLAUDE_PLUGIN_ROOT` (the consort plugin root).
-Set `CONSORT_IMPL_MODEL` to override the implementer model (default `gpt-5.6-sol`).
+Set `CONSORT_IMPL_MODEL` to override the implementer model (default `gpt-6.1-sol`).
 
 ## Inputs
 

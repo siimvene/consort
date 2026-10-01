@@ -4,7 +4,7 @@ description: Cross-model review of the current diff — Claude and Codex review 
 
 # /consort:review
 
-Run a two-model review of the working changes. You (Claude) and Codex (gpt-5.6)
+Run a two-model review of the working changes. You (Claude) and Codex (gpt-6.1)
 review the same diff independently; then merge and surface the divergence, because
 the findings that matter most are the ones a single model would have missed.
 

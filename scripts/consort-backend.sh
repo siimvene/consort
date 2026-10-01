@@ -43,7 +43,7 @@ consort_impl_model() {
   case "$(_consort_selected)" in
     gemini) echo "${CONSORT_GEMINI_MODEL:-gemini-3.1-pro-preview}" ;;
     pi)     echo "$(_consort_pi_provider)/$(_consort_pi_model)" ;;
-    *)      echo "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" ;;
+    *)      echo "${CONSORT_IMPL_MODEL:-gpt-6.1-sol}" ;;
   esac
 }
 

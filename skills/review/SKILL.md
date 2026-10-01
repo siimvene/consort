@@ -14,7 +14,7 @@ makes the second opinion worth anything.
 
 - **Claude = orchestrator + reviewer.** Plans, reads diffs, reviews, runs tests, makes
   the judgment calls. Rarely writes bulk code.
-- **Codex (gpt-5.6) = implementer + cross-reviewer.** Does the typing on flat-rate
+- **Codex (gpt-6.1) = implementer + cross-reviewer.** Does the typing on flat-rate
   ChatGPT-subscription quota, and reviews Claude's output.
 
 Whichever model authors, the other verifies. When they disagree, surface both rather
@@ -29,14 +29,14 @@ Codex runs non-interactively via the local CLI. Key invocations:
 bash "$CLAUDE_PLUGIN_ROOT"/scripts/consort-review.sh [base-ref]
 
 # generic read-only consult
-codex exec -m gpt-5.6-sol -s read-only "<prompt>"
+codex exec -m gpt-6.1-sol -s read-only "<prompt>"
 
 # Codex's native, richer review (human-readable, not structured)
 codex exec review --uncommitted
 ```
 
 `CONSORT_IMPL_MODEL` overrides the model. Verify the account can reach it first:
-`codex exec -m gpt-5.6-sol "reply OK"`.
+`codex exec -m gpt-6.1-sol "reply OK"`.
 
 ## Rule packs (shared rubric)
 

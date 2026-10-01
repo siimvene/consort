@@ -15,7 +15,7 @@ consort_impl_model() {
   case "${CONSORT_BACKEND:-codex}" in
     pi)     echo "${CONSORT_PI_PROVIDER:-openai-codex}/${CONSORT_PI_MODEL:-default}" ;;
     gemini) echo "${CONSORT_GEMINI_MODEL:-gemini-default}" ;;
-    *)      echo "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" ;;
+    *)      echo "${CONSORT_IMPL_MODEL:-gpt-6.1-sol}" ;;
   esac
 }
 STUB
@@ -62,7 +62,7 @@ check "codex:model -> CONSORT_IMPL_MODEL" 'grep -q "\[codex-gpt-9\] saw backend=
 check "gemini:model -> CONSORT_GEMINI_MODEL" 'grep -q "\[gemini-gem-9\] saw backend=gemini .* gem=gem-9" "$T/e2b"'
 
 # 3. grammar errors: nothing runs, exit 2
-for bad in 'codex,bogus' 'codex,codex' 'gemini:a:b' 'pi::m' 'codex:a:b' ', ,' "codex:$(printf 'x\033[2J')" 'codex:' 'codex,codex:gpt-5.6-sol' 'pi,pi:openai-codex' 'pi:google-vertex,pi:google-vertex:default'; do
+for bad in 'codex,bogus' 'codex,codex' 'gemini:a:b' 'pi::m' 'codex:a:b' ', ,' "codex:$(printf 'x\033[2J')" 'codex:' 'codex,codex:gpt-6.1-sol' 'pi,pi:openai-codex' 'pi:google-vertex,pi:google-vertex:default'; do
   D="$T/r3"; rm -rf "$D"
   CONSORT_REVIEWERS="$bad" CONSORT_PANEL_DIR="$D" bash "$PANEL" >/dev/null 2>"$T/e3"; rc=$?
   check "bad spec '$(printf '%q' "$bad")' -> exit 2, nothing ran" '[ "$rc" -eq 2 ] && ! ls "$D"/*/*.json >/dev/null 2>&1' "rc=$rc $(cat "$T/e3")"
