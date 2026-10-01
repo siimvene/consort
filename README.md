@@ -62,7 +62,8 @@ Each phase writes its artifact before advancing; any phase resumes from disk.
 
 Consort does not work standalone. Before installing, you need:
 
-1. **Codex CLI** — `codex` on PATH, authenticated. Sanity check:
+1. **Codex CLI** >= 0.159.1 — `codex` on PATH, authenticated (older clients
+   reject the default `gpt-6.1-sol` with a 400). Sanity check:
    `codex exec -m gpt-6.1-sol "reply OK"` (override the model with
    `CONSORT_IMPL_MODEL`).
 2. **Codex plugin for Claude Code** (recommended) — `codex@openai-codex` (from
