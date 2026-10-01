@@ -243,7 +243,7 @@ consort_codex_probe() {
   command -v codex >/dev/null || return 1
   local out; out="$(mktemp)"
   _consort_codex_exec_accounts read-only "$PWD" "$out" "" \
-    codex exec -m "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" -s read-only --skip-git-repo-check \
+    codex exec -m "${CONSORT_IMPL_MODEL:-gpt-6.1-sol}" -s read-only --skip-git-repo-check \
     --json -o "$out" "Reply with exactly: CODEX_ALIVE"
   { grep -o 'CODEX_ALIVE' "$out" || true; } | head -1
   rm -f "$out"
@@ -252,7 +252,7 @@ consort_codex_probe() {
 consort_codex_call() {
   local mode="${1:?mode required}" schema="${2:?schema required}" workdir="${3:?workdir required}"
   local sys="${4:?sys prompt required}" out="${5:?out-file required}" payload="${6:-}"
-  local model="${CONSORT_IMPL_MODEL:-gpt-5.6-sol}"
+  local model="${CONSORT_IMPL_MODEL:-gpt-6.1-sol}"
   # Empty first: a call refused below must not leave a previous run's result
   # looking like this one's.
   : > "$out"

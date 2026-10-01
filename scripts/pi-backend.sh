@@ -59,7 +59,7 @@
 # Env: CONSORT_PI_PROVIDER  (default openai-codex; google-vertex, openai,
 #                            anthropic, google, ... — Pi's provider ids)
 #      CONSORT_PI_MODEL     (default by provider: openai/openai-codex ->
-#                            $CONSORT_IMPL_MODEL or gpt-5.6-sol; google* ->
+#                            $CONSORT_IMPL_MODEL or gpt-6.1-sol; google* ->
 #                            $CONSORT_GEMINI_MODEL or gemini-3.1-pro-preview;
 #                            anthropic -> claude-opus-4-8)
 #      CONSORT_PI_THINKING  (default high; off|minimal|low|medium|high|xhigh|max)
@@ -88,7 +88,7 @@ _consort_pi_provider() { echo "${CONSORT_PI_PROVIDER:-openai-codex}"; }
 _consort_pi_model() {
   if [ -n "${CONSORT_PI_MODEL:-}" ]; then echo "$CONSORT_PI_MODEL"; return; fi
   case "$(_consort_pi_provider)" in
-    openai|openai-codex) echo "${CONSORT_IMPL_MODEL:-gpt-5.6-sol}" ;;
+    openai|openai-codex) echo "${CONSORT_IMPL_MODEL:-gpt-6.1-sol}" ;;
     google*)             echo "${CONSORT_GEMINI_MODEL:-gemini-3.1-pro-preview}" ;;
     anthropic)           echo "claude-opus-4-8" ;;
     *) echo "consort: no default model for CONSORT_PI_PROVIDER=$(_consort_pi_provider); set CONSORT_PI_MODEL" >&2; return 1 ;;
@@ -203,7 +203,7 @@ for line in sys.stdin:
         # provider/model above are Pi's client-side echo of its own config.
         # Adapters that surface the server's answer (responseModel, OpenAI
         # completions today) get it checked too: it must name the requested
-        # model, allowing a dated suffix (gpt-5.6-sol -> gpt-5.6-sol-2026-09-01).
+        # model, allowing a dated suffix (gpt-6.1-sol -> gpt-6.1-sol-2026-09-30).
         rm = m.get("responseModel")
         if rm:
             served_response.add(rm)

@@ -17,7 +17,7 @@ and no model's work ships on its own word.
 
 | | 🟠 principal | 🔷 implementer |
 |---|---|---|
-| **Reference pair** | Claude Code session (e.g. `claude-fable-5`) | `codex exec` (default `gpt-5.6-sol`) |
+| **Reference pair** | Claude Code session (e.g. `claude-fable-5`) | `codex exec` (default `gpt-6.1-sol`) |
 | **Job** | Orchestrates every phase, holds the thread, reviews, adjudicates, and **verifies everything itself**. Writes glue, never bulk code. Also a blind panel voice via headless `claude -p`. | Implements in a workspace-write sandbox, and serves as the second blind voice in panels and reviews. Returns schema-forced results, never prose. |
 | **Swap it** | any strong session model | model via `CONSORT_IMPL_MODEL`; whole vendor via `CONSORT_BACKEND=codex\|gemini\|pi` (Pi: any provider via `CONSORT_PI_PROVIDER`); several at once for review via `CONSORT_REVIEWERS` |
 
@@ -62,8 +62,9 @@ Each phase writes its artifact before advancing; any phase resumes from disk.
 
 Consort does not work standalone. Before installing, you need:
 
-1. **Codex CLI** — `codex` on PATH, authenticated. Sanity check:
-   `codex exec -m gpt-5.6-sol "reply OK"` (override the model with
+1. **Codex CLI** >= 0.159.1 — `codex` on PATH, authenticated (older clients
+   reject the default `gpt-6.1-sol` with a 400). Sanity check:
+   `codex exec -m gpt-6.1-sol "reply OK"` (override the model with
    `CONSORT_IMPL_MODEL`).
 2. **Codex plugin for Claude Code** (recommended) — `codex@openai-codex` (from
    [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)). Consort's
@@ -175,7 +176,7 @@ names the run's own directory, created 0700, so concurrent panels sharing a
 parent never touch each other's files; the parent must be a directory you
 own, not a symlink, not group- or world-writable). Leg grammar: `codex[:model]`, `gemini[:model]`,
 `pi[:provider[:model]]` — so `codex,pi:google-vertex` is the Codex CLI plus
-Gemini 3.1 Pro through Pi, and `codex,gemini,pi:openai-codex:gpt-5.6-sol`
+Gemini 3.1 Pro through Pi, and `codex,gemini,pi:openai-codex:gpt-6.1-sol`
 is three legs. A leg that pins a provider but no model unsets any ambient
 `CONSORT_PI_MODEL`, so the provider's own default applies. Two legs that
 resolve to the same backend and model are refused: one reviewer run twice
@@ -327,7 +328,7 @@ Anthropic (Pro/Max OAuth or key), OpenAI (API key or the ChatGPT/Codex
 subscription OAuth), Google Vertex (ADC or a service-account key, no API key)
 and ~25 more, all behind one headless JSON-lines protocol. `CONSORT_PI_PROVIDER`
 picks the vendor (default `openai-codex`), `CONSORT_PI_MODEL` the model
-(defaults per provider: `gpt-5.6-sol`, `gemini-3.1-pro-preview`,
+(defaults per provider: `gpt-6.1-sol`, `gemini-3.1-pro-preview`,
 `claude-opus-4-8`), `CONSORT_PI_THINKING` the effort (`high`). Whether a Pi run
 is cross-vendor depends on the provider, not on Pi: with the principal on
 Claude, `anthropic` never satisfies the gate.

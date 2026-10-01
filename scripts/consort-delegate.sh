@@ -18,11 +18,11 @@
 #   <workdir>/.consort/log.jsonl                   append-only delegation log
 #
 # Env:
-#   CONSORT_IMPL_MODEL   implementer model (default: gpt-5.6-sol)
+#   CONSORT_IMPL_MODEL   implementer model (default: gpt-6.1-sol)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODEL="${CONSORT_IMPL_MODEL:-gpt-5.6-sol}"
+MODEL="${CONSORT_IMPL_MODEL:-gpt-6.1-sol}"
 SCHEMA="$ROOT/schemas/task-result.schema.json"
 
 TASK_ID="${1:?task-id required}"

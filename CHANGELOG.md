@@ -5,6 +5,17 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.12.0] — 2026-10-01
+
+### Changed
+- **Default Codex model is now `gpt-6.1-sol`** (was `gpt-5.6-sol`) for the
+  implementer, the review/consult/delegate scripts, the panel's codex leg and
+  the Pi `openai`/`openai-codex` provider default. Needs codex-cli >= 0.159.1,
+  the first release whose model catalog carries GPT-6.1 Sol; older clients get
+  a 400 ("model is not supported when using Codex with a ChatGPT account").
+  Pin the old model with `CONSORT_IMPL_MODEL=gpt-5.6-sol` or a
+  `codex:gpt-5.6-sol` panel spec.
+
 ## [0.11.0] — 2026-09-29
 
 ### Added

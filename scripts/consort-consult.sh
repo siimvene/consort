@@ -5,7 +5,7 @@
 # Usage: consort-consult.sh <schema-file> <prompt> [workdir]
 # Emits the schema-conforming JSON on stdout ({} on failure).
 #
-# Env: CONSORT_IMPL_MODEL (default gpt-5.6-sol)
+# Env: CONSORT_IMPL_MODEL (default gpt-6.1-sol)
 #      CONSORT_CODEX_BACKEND (exec|plugin; default auto — see codex-backend.sh)
 set -euo pipefail
 SCHEMA="${1:?schema file required}"
