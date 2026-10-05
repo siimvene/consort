@@ -284,6 +284,25 @@ def check(v, sc, path='$'):
         if 'minimum' in sc and v<sc['minimum']: errs.append(f'{path}: below minimum')
         if 'maximum' in sc and v>sc['maximum']: errs.append(f'{path}: above maximum')
     return errs
+# A severity outside the findings enum (Gemini writes major, Critical...) used to discard the
+# whole review. Map the common synonyms; an unknown one is raised to high for adjudication,
+# never dropped and never downgraded. Every other schema violation still fails the leg.
+SEV={'critical':'critical','blocker':'critical','high':'high','major':'high','serious':'high','error':'high',
+     'medium':'medium','moderate':'medium','warning':'medium','warn':'medium',
+     'low':'low','minor':'low','info':'low','informational':'low','nit':'low','note':'low','trivial':'low','suggestion':'low'}
+def normalise(o, schema):
+    try: enum=schema['properties']['findings']['items']['properties']['severity']['enum']
+    except (KeyError,TypeError): return
+    fs=o.get('findings') if isinstance(o,dict) else None
+    if not isinstance(fs,list): return
+    for i,f in enumerate(fs):
+        if not isinstance(f,dict) or not isinstance(f.get('severity'),str) or f['severity'] in enum: continue
+        raw=f['severity']; key=raw.strip().lower(); mapped=SEV.get(key,'high')
+        if mapped not in enum: continue
+        f['severity']=mapped
+        if key not in SEV:
+            f['detail']=(str(f.get('detail') or '')+' [consort: severity %r is not in the schema; raised to high for adjudication]' % raw).strip()
+        print('consort: pi finding %d severity %r normalised to %s' % (i, raw, mapped), file=sys.stderr)
 t=sys.stdin.read()
 s=t.find('{')
 if s<0:
@@ -304,6 +323,7 @@ for i in range(s,len(t)):
 if e<0:
     print('consort: pi final message has an unbalanced JSON object (%d chars from the first brace) — truncated output?; not a result' % (len(t)-s), file=sys.stderr); sys.exit(1)
 o=json.loads(t[s:e+1])
+normalise(o,schema)
 errs=check(o,schema)
 if errs:
     print('consort: pi result does not conform to the schema (%s); not a result' % '; '.join(errs[:5]), file=sys.stderr); sys.exit(1)
