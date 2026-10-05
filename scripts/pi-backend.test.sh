@@ -45,4 +45,9 @@ printf '{"findings":null}' | _consort_pi_extract_json "$SCHEMA" >/dev/null 2>&1
 printf '{"findings":[{"file":"a.py","line":3,"severity":7,"title":"t","detail":"d"}]}' | _consort_pi_extract_json "$SCHEMA" >/dev/null 2>&1
 [ $? -ne 0 ]; check "a non-string severity still fails the leg" $?
 
+for bad in '' ',"detail":null' ',"detail":7'; do
+  printf '{"findings":[{"file":"a.py","line":3,"severity":"P0-ish","title":"t"%s}]}' "$bad" | _consort_pi_extract_json "$SCHEMA" >/dev/null 2>&1
+  [ $? -ne 0 ]; check "an unknown severity never repairs a bad detail (${bad:-missing})" $?
+done
+
 exit "$fail"

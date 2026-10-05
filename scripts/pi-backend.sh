@@ -300,8 +300,10 @@ def normalise(o, schema):
         raw=f['severity']; key=raw.strip().lower(); mapped=SEV.get(key,'high')
         if mapped not in enum: continue
         f['severity']=mapped
-        if key not in SEV:
-            f['detail']=(str(f.get('detail') or '')+' [consort: severity %r is not in the schema; raised to high for adjudication]' % raw).strip()
+        # Annotate only a detail that is already a string: never create or coerce one, so a
+        # missing or mistyped detail still fails the schema check below.
+        if key not in SEV and isinstance(f.get('detail'),str):
+            f['detail']=(f['detail']+' [consort: severity %r is not in the schema; raised to high for adjudication]' % raw).strip()
         print('consort: pi finding %d severity %r normalised to %s' % (i, raw, mapped), file=sys.stderr)
 t=sys.stdin.read()
 s=t.find('{')
