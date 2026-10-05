@@ -5,6 +5,22 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [0.12.1] — 2026-10-06
+
+### Fixed
+- **A Pi review is no longer thrown away for one off-enum severity.** The Pi
+  leg validated the model's final JSON against `findings.schema.json`, and a
+  single `"severity": "major"` (Gemini writes these) failed the whole result,
+  so the panel reported a FAILED leg and every finding in it was lost. The
+  validator now normalises severities first: case-insensitive, with common
+  synonyms mapped (`blocker`→critical; `major`/`serious`/`error`→high;
+  `moderate`/`warning`→medium; `minor`/`info`/`nit`/`note`/`trivial`→low). An
+  unknown value is raised to `high` for adjudication, with the original noted
+  in the finding's `detail`, so it is never dropped and never downgraded. Each
+  rewrite is logged on stderr. Any other schema violation (missing field,
+  wrong type, `findings: null`) still fails the leg. New
+  `scripts/pi-backend.test.sh` pins both sides.
+
 ## [0.12.0] — 2026-10-01
 
 ### Changed
