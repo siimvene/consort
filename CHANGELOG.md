@@ -5,6 +5,22 @@ All notable changes to consort are recorded here. Format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while
 still in 0.x.
 
+## [Unreleased]
+
+### Fixed
+- **A Codex workspace spend cap now fails over to the next account.** Codex
+  reports a workspace budget as "You hit your spend cap set in your
+  workspace", which `_CONSORT_CODEX_LIMIT_RE` did not match, so a capped
+  account read as a plain failure and `CONSORT_CODEX_HOMES` never moved on.
+  `spend cap` is now one of the limit phrases.
+- **The limit check no longer misreads a large stderr as "not limited".**
+  `_consort_codex_limited` piped the call's stderr into `grep -q`, which exits
+  on the first match; with a stderr past the pipe buffer the upstream `cat`
+  took SIGPIPE, and a caller running under `set -o pipefail` saw the pipeline
+  fail — so a genuinely limited account was treated as a hard failure and the
+  walk stopped instead of failing over. The match is now counted (`grep -c`)
+  so the whole input is read. `scripts/codex-backend.test.sh` §12 pins both.
+
 ## [0.12.1] — 2026-10-06
 
 ### Fixed
