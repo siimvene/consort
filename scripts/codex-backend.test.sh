@@ -175,4 +175,11 @@ check "probe: all limited prints nothing" '[ -z "$(CONSORT_CODEX_HOMES=$T/a:$T/c
 ( set -euo pipefail; CONSORT_CODEX_HOMES="$T/a:$T/f" consort_codex_probe >/dev/null 2>&1; echo reached > "$T/probe-errexit" )
 check "probe + error lines survive errexit/pipefail" '[ -e "$T/probe-errexit" ]'
 
+# 12. limit check under pipefail with a large stderr (grep -q SIGPIPEd the cat)
+printf '%s\n' '{"type":"error","message":"You hit your spend cap set in your workspace. Increase your spend cap to continue."}' > "$T/ev-cap"
+yes 'codex stderr padding line' | head -20000 > "$T/err-big"
+check "spend cap reads as a limit" '_consort_codex_limited "$T/ev-cap" /dev/null'
+check "limit survives pipefail + large stderr" '( set -euo pipefail; _consort_codex_limited "$T/ev-cap" "$T/err-big" )'
+check "no limit text: still not limited" '! ( set -euo pipefail; _consort_codex_limited /dev/null "$T/err-big" )'
+
 echo; [ "$fails" -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

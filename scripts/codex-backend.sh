@@ -95,7 +95,7 @@ consort_codex_backend() {
 # (strings from codex-cli 0.158: "You've hit your usage limit", "Usage limit
 # reached", "out of credits", usage_limit_reached, workspace_*_credits_depleted,
 # rate_limit_reached; plus the HTTP 429 / insufficient_quota API shapes).
-_CONSORT_CODEX_LIMIT_RE='usage[ _]limit|out of credits|credits_depleted|credit limit|rate[ _]limit|insufficient_quota|quota exceeded|too many requests|"status": ?429'
+_CONSORT_CODEX_LIMIT_RE='usage[ _]limit|spend cap|out of credits|credits_depleted|credit limit|rate[ _]limit|insufficient_quota|quota exceeded|too many requests|"status": ?429'
 
 _consort_tilde() { case "$1" in "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;; *) printf '%s' "$1" ;; esac; }
 
@@ -166,8 +166,10 @@ _consort_codex_homes() {
 # which carry the transcript: a review of code that mentions "usage limit"
 # must not read as a limit.
 _consort_codex_limited() {
+  # No `grep -q`: it exits on the first match and SIGPIPEs the `cat` of a large
+  # stderr, which a caller's `set -o pipefail` then reports as "not limited".
   { LC_ALL=C grep -E '^\{"type":"(error|turn\.failed)"' "$1"; cat "$2"; } 2>/dev/null \
-    | LC_ALL=C grep -Eiq "$_CONSORT_CODEX_LIMIT_RE"
+    | LC_ALL=C grep -Eic "$_CONSORT_CODEX_LIMIT_RE" 2>/dev/null | { read -r c; [ "${c:-0}" -gt 0 ]; }
 }
 
 _consort_codex_error_lines() {
