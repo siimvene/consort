@@ -125,7 +125,12 @@ fi
 # One fresh, exclusively created directory per run: no stale leg file, no
 # stale manifest, no two concurrent panels writing the same names.
 DIR="$PARENT/panel-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-n=0; while ! mkdir -m 700 "$DIR" 2>/dev/null; do
+# On Windows (Git Bash/MSYS, Cygwin) `mkdir -m 700` creates the directory but
+# cannot chmod it on NTFS and exits 1, so every attempt looked like a name
+# collision. There a plain mkdir keeps the exclusive create; the per-user
+# %TEMP% ACL keeps it private.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) MKDIR_RUN=(mkdir) ;; *) MKDIR_RUN=(mkdir -m 700) ;; esac
+n=0; while ! "${MKDIR_RUN[@]}" "$DIR" 2>/dev/null; do
   n=$((n+1)); [ "$n" -lt 100 ] || { echo "consort-panel: cannot create a run directory under $PARENT" >&2; exit 2; }
   DIR="$PARENT/panel-$(date -u +%Y%m%dT%H%M%SZ)-$$-$n"
 done
