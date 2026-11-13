@@ -27,7 +27,10 @@ still in 0.x.
   line with control and format characters dropped and known credential shapes
   taken out (a URL's userinfo and every query or fragment value, credential
   headers, named secrets in JSON or form text, JWTs, vendor key prefixes, PEM
-  blocks, long opaque runs): a filter of known shapes, not a guarantee. A turn
+  blocks, long opaque runs; a credential header loses the rest of its line):
+  a filter of known shapes, not a guarantee. It reads the first 8000
+  characters with bounded patterns, so a hostile message cannot hold the leg
+  in regex backtracking. A turn
   that carries an error message still fails the run when nothing in the
   message is printable. `scripts/pi-backend.test.sh` pins both changes.
 - **A Codex workspace spend cap now fails over to the next account.** Codex

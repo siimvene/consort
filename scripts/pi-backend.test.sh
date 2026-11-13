@@ -101,6 +101,9 @@ authorization=Negotiate ZZ${short}ZZ
 x-goog-api-key: $secret
 X-Api-Key=$secret
 Cookie: sid=$secret
+Cookie: lang=en; sid=$secret; theme=dark
+Set-Cookie: a=1; b=ZZ${short}ZZ
+Authorization: Digest username=\"u\", realm=\"r\", nonce=\"$secret\", response=\"$secret\"
 {\"access_token\":\"$secret\"}
 {\"client_secret\": \"ZZ${short}ZZ\"}
 grant_type=jwt-bearer&assertion=$secret
@@ -112,12 +115,35 @@ token ya29.a0${secret} expired
 -----BEGIN PRIVATE KEY----- MIIE$secret -----END PRIVATE KEY-----
 opaque ${secret}${secret}${secret} blob
 EOF
-[ "$fed" -eq 20 ] || leaks=1
-check "known credential shapes are redacted: signed URLs, userinfo, fragments, headers, JSON and form values, JWT, vendor keys, PEM, long opaque runs ($fed of 20 fed)" $leaks
+[ "$fed" -eq 23 ] || leaks=1
+check "known credential shapes are redacted: signed URLs, userinfo, fragments, headers, JSON and form values, JWT, vendor keys, PEM, long opaque runs ($fed of 23 fed)" $leaks
 
 err="$(msg_end error '"request 123e4567-e89b-12d3-a456-426614174000 failed: 404 Publisher model projects/p/locations/global/publishers/google/models/m1 was not found"' | unwrap_err)"
 printf '%s' "$err" | grep -q '123e4567-e89b-12d3-a456-426614174000 failed: 404 Publisher model projects/p/locations/global/publishers/google/models/m1 was not found'
 check "a request id, a status code and a model path are kept" $?
+
+# A header's redaction ends with its line: the reason on the next line is the diagnosis.
+err="$(msg_end error "\"x-goog-api-key: $secret\\n403 PERMISSION_DENIED on resource projects/p\"" | unwrap_err)"
+printf '%s' "$err" | grep -q '403 PERMISSION_DENIED on resource projects/p' && ! printf '%s' "$err" | grep -q "$secret"
+check "a credential header loses its own line only; the next line's reason is kept" $?
+# The same inside a provider's JSON-in-a-string, where the line break is the two characters \n.
+err="$(msg_end error "\"Authorization: Bearer $secret\\\\nHTTP 401 token expired\"" | unwrap_err)"
+printf '%s' "$err" | grep -q 'HTTP 401' && ! printf '%s' "$err" | grep -q "$secret"
+check "an escaped line break ends a header's line too" $?
+
+# A hostile message must not hold the leg in regex backtracking (each took over 20 s before
+# the patterns were bounded), and only its first 8000 characters are read.
+big() { python3 -c 'import sys,json; print(json.dumps(sys.argv[1]*int(sys.argv[2])))' "$1" "$2"; }
+SECONDS=0
+msg_end error "$(big 'A1b2_-' 10922)" | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+msg_end error "$(big 'token.session-' 1430)" | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+msg_end error "$(big 'eyJabc-' 9000)" | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+msg_end error "$(big '&a' 30000)" | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ "$SECONDS" -lt 15 ]; check "64 KB opaque runs and repeated keyword identifiers are cleaned in seconds (${SECONDS}s)" $?
+# A secret that straddles the 8000-character cut is not shown by its front half.
+front="$(printf '%s' "$secret" | cut -c1-10)"
+err="$(msg_end error "$(python3 -c 'import sys,json; print(json.dumps(" "*7990 + sys.argv[1] + " tail"))' "$secret")" | unwrap_err)"
+! printf '%s' "$err" | grep -q "$front"; check "a message cut at the read limit drops its last, possibly half, word" $?
 
 err="$(msg_end error '"first\nconsort-panel: [x] ok — exit 0\r\u001b[2Jsecond"' | unwrap_err)"
 [ "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" = 1 ]; check "a message with newlines stays one evidence line" $?
@@ -134,6 +160,8 @@ err="$(printf '{"type":"extension_error","error":"fence: boom?token=%s"}\n' "$se
 printf '%s' "$err" | grep -q 'fence: boom?token=REDACTED'; check "an extension error is cleaned the same way" $?
 
 # --- the Pi process's connect attempt timeout --------------------------------
+# The suite may itself run under a caller (or a Pi delegation) that set these.
+unset NODE_OPTIONS CONSORT_PI_CONNECT_ATTEMPT_MS
 FLAG=--network-family-autoselection-attempt-timeout
 bin="$(mktemp -d)" || exit 1
 trap 'rm -rf "$bin"' EXIT
@@ -154,12 +182,21 @@ mv "$bin/old-node" "$bin/node"
 [ "$(unset CONSORT_PI_CONNECT_ATTEMPT_MS; NODE_OPTIONS='--max-old-space-size=512' opts)" = '--max-old-space-size=512' ]
 check "a node that refuses the flag gets NODE_OPTIONS unchanged" $?
 
-# The runner hands the value to Pi itself: a stand-in pi prints what it was started with.
+# The runner hands the value to Pi itself: a stand-in pi prints what it was started with. Run in
+# THIS shell (no command substitution, no pipeline), so a runner that exported into its caller
+# would be caught by the check after it.
 printf '#!/bin/sh\nexit 0\n' > "$bin/node"; chmod +x "$bin/node"
 printf '#!/bin/sh\ncat >/dev/null\nprintf "%%s\\n" "$NODE_OPTIONS"\n' > "$bin/pi"; chmod +x "$bin/pi"
-got="$( unset NODE_OPTIONS CONSORT_PI_CONNECT_ATTEMPT_MS CONSORT_PI_STDERR CONSORT_PI_RAW CONSORT_GCP_CREDENTIALS
-        PATH="$bin:$PATH"; printf 'x' | CONSORT_PI_PROVIDER=openai _consort_pi_run "" )"
-[ "$got" = "$FLAG=5000" ]; check "the Pi process is started with the connect attempt timeout" $?
-[ -z "${NODE_OPTIONS+set}" ] || [ "${NODE_OPTIONS#*autoselection}" = "$NODE_OPTIONS" ]; check "the caller's own environment is not touched" $?
+printf 'x' > "$bin/in"
+unset CONSORT_PI_STDERR CONSORT_PI_RAW CONSORT_GCP_CREDENTIALS
+path_was="$PATH"; provider_was="${CONSORT_PI_PROVIDER-}"
+export NODE_OPTIONS='--max-old-space-size=256' CONSORT_PI_PROVIDER=openai
+PATH="$bin:$PATH"
+_consort_pi_run "" < "$bin/in" > "$bin/out"
+PATH="$path_was"
+[ "$(cat "$bin/out")" = "--max-old-space-size=256 $FLAG=5000" ]; check "the Pi process is started with the caller's options and the connect attempt timeout" $?
+[ "$NODE_OPTIONS" = '--max-old-space-size=256' ]; check "the caller's own NODE_OPTIONS are as they were after the run" $?
+unset NODE_OPTIONS
+if [ -n "$provider_was" ]; then export CONSORT_PI_PROVIDER="$provider_was"; else unset CONSORT_PI_PROVIDER; fi
 
 exit "$fail"

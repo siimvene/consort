@@ -184,31 +184,45 @@ _consort_pi_unwrap() {
   read -r -d '' script <<'EOF' || true
 import json, re, sys, unicodedata
 want_p, want_m = sys.argv[1], sys.argv[2]
+CLEAN_READS = 8000
 def clean(v, n=300):
     # What reaches the evidence line. The text is the provider's, the network stack's or,
     # indirectly, a model's: keep it to one line (a line break would forge a log line), drop
     # control and format characters (escapes, bidi overrides, zero-width), and take out what
     # looks like a credential. The filter errs towards removing too much; it is a filter of
     # known shapes, not a proof: CONSORT_PI_RAW holds the full text, owner-only.
-    v = "".join(" " if unicodedata.category(ch) in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp") else ch for ch in str(v))
+    # Only the first CLEAN_READS characters are read, and every pattern is anchored or
+    # bounded, so a hostile message cannot hold the leg in backtracking. A message cut there
+    # loses its last word: it may be the front half of a secret no pattern knows any more.
+    v = str(v)
+    cut = len(v) > CLEAN_READS
+    v = v[:CLEAN_READS]
     R = "REDACTED"
-    v = re.sub(r"-----BEGIN[^-]*-----.*?(?:-----END[^-]*-----|$)", R, v, flags=re.S)
+    v = re.sub(r"-----BEGIN[^-]{0,40}-----.*?(?:-----END[^-]{0,40}-----|$)", R, v, flags=re.S)
+    # A credential header: the rest of its line, whatever is on it (several cookies, a Digest
+    # header's parameters). Done before line breaks are flattened, so the next line (the status,
+    # the reason) is kept; a JSON-escaped line break ends the line too.
+    v = re.sub(r"(?i)(?<![a-z0-9-])((?:proxy-)?authorization|cookie|set-cookie|x-goog-api-key|x-api-key|api-key"
+               r"|x-[a-z0-9-]{0,40}(?:token|key|secret|signature))([\"']?[ \t]{0,8}[:=])(?:[^\r\n\\]|\\(?![nr]))*",
+               r"\1\2 " + R, v)
+    v = "".join(" " if unicodedata.category(ch) in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp") else ch for ch in v)
     # A URL: everything before an @ in the authority, and every query or fragment value.
-    v = re.sub(r"(://)[^/\s@?#]*@", r"\1" + R + "@", v)
-    v = re.sub(r"([?&;#][A-Za-z0-9_.~%\[\]-]+=)[^&;#\s\"'<>)]*", r"\1" + R, v)
-    # A credential header or scheme, whatever the length of its value.
-    v = re.sub(r"(?i)\b((?:proxy-)?authorization|cookie|set-cookie|[a-z0-9-]*api-?key|x-[a-z0-9-]*(?:token|key|secret|signature))"
-               r"([\"']?\s*[:=]\s*[\"']?)[^\"',;}\n]+", r"\1\2" + R, v)
-    v = re.sub(r"(?i)\b(bearer|basic|digest|negotiate)\s+[A-Za-z0-9._~+/=-]+", r"\1 " + R, v)
-    # A named value in JSON, a form body or key=value text.
-    v = re.sub(r"(?i)([\"']?[a-z0-9_.-]*(?:token|secret|passw|api[_-]?key|assertion|credential|signature|private[_-]?key|session)[a-z0-9_.-]*[\"']?"
-               r"\s*[:=]\s*[\"']?)[^\s\"',;&}]+", r"\1" + R, v)
+    v = re.sub(r"(://)[^/\s@?#]{0,256}@", r"\1" + R + "@", v)
+    v = re.sub(r"([?&;#][A-Za-z0-9_.~%\[\]-]{1,128}=)[^&;#\s\"'<>)]*", r"\1" + R, v)
+    v = re.sub(r"(?i)\b(bearer|basic|digest|negotiate)\s{1,8}[A-Za-z0-9._~+/=-]+", r"\1 " + R, v)
+    # A named value in JSON, a form body or key=value text. The name starts at an identifier
+    # boundary and is bounded on both sides of the keyword.
+    v = re.sub(r"(?i)(?<![a-z0-9_.-])([\"']?[a-z0-9_.-]{0,48}?(?:token|secret|passw|api[_-]?key|assertion|credential|signature|private[_-]?key|session)"
+               r"[a-z0-9_.-]{0,48}[\"']?\s{0,8}[:=]\s{0,8}[\"']?)[^\s\"',;&}]+", r"\1" + R, v)
     # Shapes that are credentials wherever they stand: a JWT, Google and OpenAI style keys,
     # GitHub tokens, and any long opaque run (a UUID, 36 characters, is kept: request ids).
-    v = re.sub(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?", R, v)
+    v = re.sub(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?", R, v)
     v = re.sub(r"\b(?:AIza[0-9A-Za-z_-]{20,}|ya29\.[0-9A-Za-z._-]+|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})", R, v)
     v = re.sub(r"[A-Za-z0-9+_-]{40,}={0,2}", R, v)
-    return re.sub(r"\s+", " ", v).strip()[:n]
+    v = re.sub(r"\s+", " ", v).strip()
+    if cut:
+        v = v.rpartition(" ")[0]
+    return v[:n]
 assistants, served, tools, final_text, errors = 0, set(), 0, None, []
 served_response = set()
 usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0}

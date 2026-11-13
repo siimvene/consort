@@ -401,8 +401,10 @@ the leg's stderr line, so the cause is readable without the capture files. The
 message is cut to one line of 300 characters, control and format characters
 are dropped, and known credential shapes are taken out (a URL's userinfo and
 every query or fragment value, credential headers, named secrets in JSON or
-form text, JWTs, vendor key prefixes, PEM blocks, long opaque runs). That is a
-filter of known shapes, not a guarantee: treat a leg's stderr as you treat any
+form text, JWTs, vendor key prefixes, PEM blocks, long opaque runs); a
+credential header loses the rest of its line. Only the first 8000 characters
+are read, with bounded patterns, so a hostile message cannot stall the leg.
+That is a filter of known shapes, not a guarantee: treat a leg's stderr as you treat any
 provider error text, and open `CONSORT_PI_RAW` for the full message.
 
 The Pi process is started with
