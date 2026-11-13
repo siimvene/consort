@@ -396,7 +396,18 @@ must be regular files you own, never symlinks, and are made owner-only. A run wh
 token limit is discarded as truncated, not parsed as a partial result.
 `CONSORT_PI_STDERR` captures Pi's stderr and `CONSORT_PI_RAW` its raw
 `--mode json` event stream (both owner-only) — the evidence to open when a
-run was discarded.
+run was discarded. A run Pi ended in error names the provider's own message on
+the leg's stderr line (one line, credentials in URLs and headers redacted), so
+the cause is readable without the capture files.
+
+The Pi process is started with
+`NODE_OPTIONS=--network-family-autoselection-attempt-timeout=5000`
+(`CONSORT_PI_CONNECT_ATTEMPT_MS`, `0` to leave Node alone; your own
+`NODE_OPTIONS` are kept, and a value you already set for that flag wins). Node
+gives each address family of a dual-stack host a short connect attempt (500 ms
+on Node 26); on a machine that resolves IPv6 but cannot route it, an IPv4
+connect slower than that fails the whole request with an empty reason, and a
+Vertex run dies at the token fetch before the first model call.
 
 Delegation entries in `.consort/log.jsonl` record which backend + model served
 each task.

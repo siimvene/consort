@@ -71,6 +71,9 @@
 #      CONSORT_PI_STDERR    (file to append Pi's stderr to; dropped by default)
 #      CONSORT_PI_RAW       (file to append Pi's raw --mode json event stream to,
 #                            owner-only; the evidence when a run is discarded)
+#      CONSORT_PI_CONNECT_ATTEMPT_MS  (default 5000; 0 = leave Node alone) how long
+#                           Pi's Node gives one address family to connect before
+#                           it falls over to the next; see _consort_pi_node_options
 #      CONSORT_PI_SAME_VENDOR_OK=1        allow provider=anthropic (principal is not Claude)
 #      CONSORT_PI_UNSANDBOXED_WRITE_OK=1  allow workspace-write (no OS sandbox)
 #      Provider auth is Pi's own: `pi auth check --provider <id>`; Vertex reads
@@ -179,8 +182,17 @@ except Exception: sys.exit(1)' "$v" "$_CONSORT_PI_MIN_VERSION" \
 _consort_pi_unwrap() {
   local script
   read -r -d '' script <<'EOF' || true
-import json, sys
+import json, re, sys
 want_p, want_m = sys.argv[1], sys.argv[2]
+def clean(v, n=300):
+    # What reaches the evidence line: one line, no control characters (the text is the
+    # provider's or the network stack's, and a newline in it would forge a log line), and
+    # no credential a client put into a URL or echoed from a header.
+    v = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+", " ", str(v))
+    v = re.sub(r"(?i)([?&;](?:key|api[_-]?key|token|access_token|id_token|refresh_token|client_secret|signature|sig)=)[^&;\s\"']+", r"\1REDACTED", v)
+    v = re.sub(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 REDACTED", v)
+    v = re.sub(r"(?i)(://[^/\s:@]+:)[^@\s/]+@", r"\1REDACTED@", v)
+    return v.strip()[:n]
 assistants, served, tools, final_text, errors = 0, set(), 0, None, []
 served_response = set()
 usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0}
@@ -199,7 +211,7 @@ for line in sys.stdin:
     if t == "tool_execution_start":
         tools += 1
     elif t == "extension_error":
-        errors.append(str(o.get("error") or o)[:200])
+        errors.append(clean(o.get("error") or o))
     elif t == "message_end":
         m = o.get("message") or {}
         if m.get("role") != "assistant":
@@ -217,15 +229,22 @@ for line in sys.stdin:
         for k in usage:
             usage[k] += u.get(k, 0) or 0
         cost += ((u.get("cost") or {}).get("total") or 0)
-        if m.get("errorMessage"):
-            errors.append(str(m["errorMessage"])[:200])
+        em = clean(m.get("errorMessage") or "")
+        if em.endswith("reason:"):
+            # node-fetch prints an AggregateError (every connect attempt of a host failed)
+            # with an empty reason; CONSORT_PI_CONNECT_ATTEMPT_MS is the knob for that.
+            em += " (empty: several connect attempts failed, see CONSORT_PI_CONNECT_ATTEMPT_MS)"
         texts = [c.get("text") for c in (m.get("content") or []) if isinstance(c, dict) and c.get("type") == "text" and c.get("text")]
         if texts:
             final_text = "\n".join(texts)
         if m.get("stopReason") in ("error", "aborted"):
-            errors.append(f"stopReason={m.get('stopReason')}")
+            # The message is the cause; the stop reason alone names none.
+            errors.append(f"stopReason={m.get('stopReason')}: " + (em or "the stream carries no error message"))
         elif m.get("stopReason") in ("length", "max_tokens"):
-            errors.append("stopReason=length (output truncated at the token limit; the final JSON cannot be complete)")
+            errors.append("stopReason=length (output truncated at the token limit; the final JSON cannot be complete)"
+                          + (f": {em}" if em else ""))
+        elif em:
+            errors.append(em)
 if not saw_any:
     print("consort: pi produced no JSON event stream — cannot prove which model ran; result discarded", file=sys.stderr)
     sys.exit(2)
@@ -238,7 +257,6 @@ if served != {(want_p, want_m)}:
     sys.exit(2)
 # Exact id, or the id with a dated deployment suffix (-YYYY-MM-DD); nothing
 # else — "gpt-5-mini" must not pass for "gpt-5".
-import re
 ok_rm = re.compile(r"^(?:.*/)?" + re.escape(want_m) + r"(?:-\d{4}-\d{2}-\d{2})?$")
 bad = sorted(r for r in served_response if not ok_rm.match(r))
 if bad:
@@ -339,6 +357,36 @@ sys.stdout.write(json.dumps(o))
 " "$@"
 }
 
+# NODE_OPTIONS for the Pi process. Node connects to a host that resolves to both
+# address families by giving each one a short attempt in turn (500 ms on Node 26,
+# net.getDefaultAutoSelectFamilyAttemptTimeout()). On a host that resolves AAAA
+# but has no IPv6 route, an IPv4 connect slower than that (a loaded machine, a
+# slow link) falls over to IPv6, which fails at once, and the request dies as an
+# AggregateError whose message is empty: google-auth's token fetch then reads
+# "request to https://oauth2.googleapis.com/token failed, reason: " and Pi ends
+# the run with stopReason=error before the first model call. Reproduced by
+# stalling a dual-stack connect past the attempt timeout; 5 s per attempt made
+# the same stall pass. The caller's own NODE_OPTIONS are kept, and a value the
+# caller already chose for this flag wins.
+_consort_pi_node_options() {
+  local cur="${NODE_OPTIONS:-}" ms="${CONSORT_PI_CONNECT_ATTEMPT_MS:-5000}"
+  local flag=--network-family-autoselection-attempt-timeout
+  case "$cur" in *"$flag"*) printf '%s' "$cur"; return 0 ;; esac
+  case "$ms" in
+    0) printf '%s' "$cur"; return 0 ;;
+    ''|*[!0-9]*)
+      echo "consort: CONSORT_PI_CONNECT_ATTEMPT_MS must be a whole number of milliseconds (0 = off), got '$ms'; leaving Node's default" >&2
+      printf '%s' "$cur"; return 0 ;;
+  esac
+  # A Node that does not know the flag refuses to start with it in NODE_OPTIONS,
+  # which would fail every run: add it only where this host's node accepts it.
+  if NODE_OPTIONS="$flag=$ms" node -e 0 >/dev/null 2>&1; then
+    printf '%s' "${cur:+$cur }$flag=$ms"
+  else
+    printf '%s' "$cur"
+  fi
+}
+
 # Runs Pi once in <workdir> ("" = stay put) with the given extra args; the
 # prompt comes on stdin (Pi merges piped stdin into the initial message, so
 # a diff of any size travels without touching ARG_MAX). Pi's stderr goes to
@@ -354,6 +402,7 @@ _consort_pi_run() {
   errf="$(_consort_pi_private_file "${CONSORT_PI_STDERR:-}" CONSORT_PI_STDERR)" || return 1
   rawf="$(_consort_pi_private_file "${CONSORT_PI_RAW:-}" CONSORT_PI_RAW)" || return 1
   local creds; creds="$(_consort_pi_gcp_credentials)"
+  local nodeopts; nodeopts="$(_consort_pi_node_options)"
   (
     if [ -n "$workdir" ]; then cd "$workdir" || exit 1; fi
     # Consort-scoped Google settings, exported for this Pi process only.
@@ -370,7 +419,7 @@ _consort_pi_run() {
     local ext=(-e "$_CONSORT_PI_FENCE")
     [ "$(_consort_pi_provider)" != google-vertex ] || ext+=(-e "$_CONSORT_PI_VERTEX_SHIM")
     CONSORT_PI_WORKDIR="${workdir:-$PWD}" CONSORT_PI_MODE="${CONSORT_PI_MODE:-read-only}" \
-    CONSORT_PI_THINKING="$(_consort_pi_thinking)" \
+    CONSORT_PI_THINKING="$(_consort_pi_thinking)" NODE_OPTIONS="$nodeopts" \
     pi -p --mode json --no-session --offline "${ext[@]}" "$@" 2>>"$errf" | tee -a "$rawf"
   )
 }
