@@ -397,8 +397,13 @@ token limit is discarded as truncated, not parsed as a partial result.
 `CONSORT_PI_STDERR` captures Pi's stderr and `CONSORT_PI_RAW` its raw
 `--mode json` event stream (both owner-only) — the evidence to open when a
 run was discarded. A run Pi ended in error names the provider's own message on
-the leg's stderr line (one line, credentials in URLs and headers redacted), so
-the cause is readable without the capture files.
+the leg's stderr line, so the cause is readable without the capture files. The
+message is cut to one line of 300 characters, control and format characters
+are dropped, and known credential shapes are taken out (a URL's userinfo and
+every query or fragment value, credential headers, named secrets in JSON or
+form text, JWTs, vendor key prefixes, PEM blocks, long opaque runs). That is a
+filter of known shapes, not a guarantee: treat a leg's stderr as you treat any
+provider error text, and open `CONSORT_PI_RAW` for the full message.
 
 The Pi process is started with
 `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=5000`

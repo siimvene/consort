@@ -182,17 +182,33 @@ except Exception: sys.exit(1)' "$v" "$_CONSORT_PI_MIN_VERSION" \
 _consort_pi_unwrap() {
   local script
   read -r -d '' script <<'EOF' || true
-import json, re, sys
+import json, re, sys, unicodedata
 want_p, want_m = sys.argv[1], sys.argv[2]
 def clean(v, n=300):
-    # What reaches the evidence line: one line, no control characters (the text is the
-    # provider's or the network stack's, and a newline in it would forge a log line), and
-    # no credential a client put into a URL or echoed from a header.
-    v = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+", " ", str(v))
-    v = re.sub(r"(?i)([?&;](?:key|api[_-]?key|token|access_token|id_token|refresh_token|client_secret|signature|sig)=)[^&;\s\"']+", r"\1REDACTED", v)
-    v = re.sub(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 REDACTED", v)
-    v = re.sub(r"(?i)(://[^/\s:@]+:)[^@\s/]+@", r"\1REDACTED@", v)
-    return v.strip()[:n]
+    # What reaches the evidence line. The text is the provider's, the network stack's or,
+    # indirectly, a model's: keep it to one line (a line break would forge a log line), drop
+    # control and format characters (escapes, bidi overrides, zero-width), and take out what
+    # looks like a credential. The filter errs towards removing too much; it is a filter of
+    # known shapes, not a proof: CONSORT_PI_RAW holds the full text, owner-only.
+    v = "".join(" " if unicodedata.category(ch) in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp") else ch for ch in str(v))
+    R = "REDACTED"
+    v = re.sub(r"-----BEGIN[^-]*-----.*?(?:-----END[^-]*-----|$)", R, v, flags=re.S)
+    # A URL: everything before an @ in the authority, and every query or fragment value.
+    v = re.sub(r"(://)[^/\s@?#]*@", r"\1" + R + "@", v)
+    v = re.sub(r"([?&;#][A-Za-z0-9_.~%\[\]-]+=)[^&;#\s\"'<>)]*", r"\1" + R, v)
+    # A credential header or scheme, whatever the length of its value.
+    v = re.sub(r"(?i)\b((?:proxy-)?authorization|cookie|set-cookie|[a-z0-9-]*api-?key|x-[a-z0-9-]*(?:token|key|secret|signature))"
+               r"([\"']?\s*[:=]\s*[\"']?)[^\"',;}\n]+", r"\1\2" + R, v)
+    v = re.sub(r"(?i)\b(bearer|basic|digest|negotiate)\s+[A-Za-z0-9._~+/=-]+", r"\1 " + R, v)
+    # A named value in JSON, a form body or key=value text.
+    v = re.sub(r"(?i)([\"']?[a-z0-9_.-]*(?:token|secret|passw|api[_-]?key|assertion|credential|signature|private[_-]?key|session)[a-z0-9_.-]*[\"']?"
+               r"\s*[:=]\s*[\"']?)[^\s\"',;&}]+", r"\1" + R, v)
+    # Shapes that are credentials wherever they stand: a JWT, Google and OpenAI style keys,
+    # GitHub tokens, and any long opaque run (a UUID, 36 characters, is kept: request ids).
+    v = re.sub(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?", R, v)
+    v = re.sub(r"\b(?:AIza[0-9A-Za-z_-]{20,}|ya29\.[0-9A-Za-z._-]+|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})", R, v)
+    v = re.sub(r"[A-Za-z0-9+_-]{40,}={0,2}", R, v)
+    return re.sub(r"\s+", " ", v).strip()[:n]
 assistants, served, tools, final_text, errors = 0, set(), 0, None, []
 served_response = set()
 usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0}
@@ -229,7 +245,11 @@ for line in sys.stdin:
         for k in usage:
             usage[k] += u.get(k, 0) or 0
         cost += ((u.get("cost") or {}).get("total") or 0)
+        # Whether the turn failed is decided on the raw value; clean() is for printing only.
+        failed = bool(m.get("errorMessage"))
         em = clean(m.get("errorMessage") or "")
+        if failed and not em:
+            em = "an error message with no printable text"
         if em.endswith("reason:"):
             # node-fetch prints an AggregateError (every connect attempt of a host failed)
             # with an empty reason; CONSORT_PI_CONNECT_ATTEMPT_MS is the knob for that.
@@ -243,7 +263,7 @@ for line in sys.stdin:
         elif m.get("stopReason") in ("length", "max_tokens"):
             errors.append("stopReason=length (output truncated at the token limit; the final JSON cannot be complete)"
                           + (f": {em}" if em else ""))
-        elif em:
+        elif failed:
             errors.append(em)
 if not saw_any:
     print("consort: pi produced no JSON event stream — cannot prove which model ran; result discarded", file=sys.stderr)

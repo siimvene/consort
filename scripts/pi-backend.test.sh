@@ -78,12 +78,57 @@ printf '%s' "$err" | grep -q 'quota exceeded for the project'; check "an error m
 # Fresh values, minted here: a documented example key would prove nothing.
 secret="k$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 err="$(msg_end error "\"request to https://h.example/v1/models?key=$secret&alt=sse failed; Authorization: Bearer $secret; https://u:$secret@h.example/\"" | unwrap_err)"
-printf '%s' "$err" | grep -q 'key=REDACTED&alt=sse'; check "a key in a URL's query is redacted, the rest of the URL kept" $?
+printf '%s' "$err" | grep -q 'https://h.example/v1/models?key=REDACTED&alt=REDACTED'; check "a URL keeps its host, path and query names; every query value is redacted" $?
 ! printf '%s' "$err" | grep -q "$secret"; check "no form of the secret reaches the evidence line (query, bearer, userinfo)" $?
+
+# One shape per run, so the 300-character cap cannot hide a miss. Each carries the fresh secret.
+short="$(printf '%s' "$secret" | cut -c1-4)"   # a value shorter than any length threshold
+leaks=0; fed=0
+while IFS= read -r shape; do
+  [ -n "$shape" ] || continue
+  err="$(msg_end error "\"upstream said: $shape\"" | unwrap_err)"
+  # A shape that broke the stand-in stream never reached the filter: that is a blind case, not a pass.
+  case "$err" in *"stopReason=error: upstream said:"*) fed=$((fed+1)) ;; *) echo "     not fed: $shape"; leaks=1 ;; esac
+  if printf '%s' "$err" | grep -q -e "$secret" -e "ZZ${short}ZZ"; then echo "     leaked: $shape"; leaks=1; fi
+done <<EOF
+https://s3.example/o?X-Amz-Signature=$secret&X-Amz-Credential=$secret
+https://$secret@h.example/path
+https://:$secret@h.example/path
+https://h.example/cb#access_token=$secret&state=1
+Authorization: Basic ZZ${short}ZZ
+Authorization: Token $secret
+authorization=Negotiate ZZ${short}ZZ
+x-goog-api-key: $secret
+X-Api-Key=$secret
+Cookie: sid=$secret
+{\"access_token\":\"$secret\"}
+{\"client_secret\": \"ZZ${short}ZZ\"}
+grant_type=jwt-bearer&assertion=$secret
+client_assertion=$secret
+password=ZZ${short}ZZ
+eyJhbGciOiJSUzI1NiJ9.eyJ$secret.sig$secret
+key AIzaSy${secret}${secret}abcd rejected
+token ya29.a0${secret} expired
+-----BEGIN PRIVATE KEY----- MIIE$secret -----END PRIVATE KEY-----
+opaque ${secret}${secret}${secret} blob
+EOF
+[ "$fed" -eq 20 ] || leaks=1
+check "known credential shapes are redacted: signed URLs, userinfo, fragments, headers, JSON and form values, JWT, vendor keys, PEM, long opaque runs ($fed of 20 fed)" $leaks
+
+err="$(msg_end error '"request 123e4567-e89b-12d3-a456-426614174000 failed: 404 Publisher model projects/p/locations/global/publishers/google/models/m1 was not found"' | unwrap_err)"
+printf '%s' "$err" | grep -q '123e4567-e89b-12d3-a456-426614174000 failed: 404 Publisher model projects/p/locations/global/publishers/google/models/m1 was not found'
+check "a request id, a status code and a model path are kept" $?
 
 err="$(msg_end error '"first\nconsort-panel: [x] ok — exit 0\r\u001b[2Jsecond"' | unwrap_err)"
 [ "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" = 1 ]; check "a message with newlines stays one evidence line" $?
 ! printf '%s' "$err" | LC_ALL=C grep -q "$(printf '\033')"; check "control characters are dropped from the message" $?
+err="$(msg_end error '"a\u202eb\u200bc\u2066d\u2028e"' | unwrap_err)"
+printf '%s' "$err" | grep -q 'stopReason=error: a b c d e'; check "bidi overrides, zero-width characters and line separators are dropped" $?
+
+for blank in '" "' '"\n"' '"\u0000"' '"\u200b"'; do
+  msg_end stop "$blank" '{}' | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+  [ $? -eq 2 ]; check "an error message with nothing printable in it still fails the run ($blank)" $?
+done
 
 err="$(printf '{"type":"extension_error","error":"fence: boom?token=%s"}\n' "$secret" | unwrap_err)"
 printf '%s' "$err" | grep -q 'fence: boom?token=REDACTED'; check "an extension error is cleaned the same way" $?

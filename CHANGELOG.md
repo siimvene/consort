@@ -23,10 +23,13 @@ still in 0.x.
 - **A Pi run that ended in error says why.** The leg's stderr line read
   `pi marked the run failed (stopReason=error)` whatever the cause, because
   the stop reason was recorded after the provider's message and only the last
-  entry was printed. The message now travels with the stop reason, cleaned to
-  one line with control characters dropped and credentials in a URL query, a
-  URL's userinfo or a bearer/basic header redacted. `scripts/pi-backend.test.sh`
-  pins both changes.
+  entry was printed. The message now travels with the stop reason, cut to one
+  line with control and format characters dropped and known credential shapes
+  taken out (a URL's userinfo and every query or fragment value, credential
+  headers, named secrets in JSON or form text, JWTs, vendor key prefixes, PEM
+  blocks, long opaque runs): a filter of known shapes, not a guarantee. A turn
+  that carries an error message still fails the run when nothing in the
+  message is printable. `scripts/pi-backend.test.sh` pins both changes.
 - **A Codex workspace spend cap now fails over to the next account.** Codex
   reports a workspace budget as "You hit your spend cap set in your
   workspace", which `_CONSORT_CODEX_LIMIT_RE` did not match, so a capped
