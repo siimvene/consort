@@ -8,6 +8,31 @@ still in 0.x.
 ## [Unreleased]
 
 ### Fixed
+- **A Pi leg no longer dies at the token fetch on a host that resolves IPv6
+  but cannot route it.** Node gives each address family of a dual-stack host
+  a short connect attempt (500 ms on Node 26). When the IPv4 connect to
+  `oauth2.googleapis.com` took longer (a loaded machine), Node fell over to
+  IPv6, which failed at once, and google-auth's token request ended as an
+  AggregateError with an empty message; Pi closed the run with
+  `stopReason=error` before the first model call and the panel exited 3. The
+  Pi process now gets `--network-family-autoselection-attempt-timeout=5000`
+  in `NODE_OPTIONS` (`CONSORT_PI_CONNECT_ATTEMPT_MS`, `0` = off; the caller's
+  options are kept, a value the caller set for the flag wins, and a Node that
+  does not accept the flag is left alone). Reproduced by stalling a dual-stack
+  connect past the attempt timeout; the same stall passes with 5 s.
+- **A Pi run that ended in error says why.** The leg's stderr line read
+  `pi marked the run failed (stopReason=error)` whatever the cause, because
+  the stop reason was recorded after the provider's message and only the last
+  entry was printed. The message now travels with the stop reason, cut to one
+  line with control and format characters dropped and known credential shapes
+  taken out (a URL's userinfo and every query or fragment value, credential
+  headers, named secrets in JSON or form text, JWTs, vendor key prefixes, PEM
+  blocks, long opaque runs; a credential header loses the rest of its line):
+  a filter of known shapes, not a guarantee. It reads the first 8000
+  characters with bounded patterns, so a hostile message cannot hold the leg
+  in regex backtracking. A turn
+  that carries an error message still fails the run when nothing in the
+  message is printable. `scripts/pi-backend.test.sh` pins both changes.
 - **A Codex workspace spend cap now fails over to the next account.** Codex
   reports a workspace budget as "You hit your spend cap set in your
   workspace", which `_CONSORT_CODEX_LIMIT_RE` did not match, so a capped
