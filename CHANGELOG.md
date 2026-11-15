@@ -8,6 +8,17 @@ still in 0.x.
 ## [Unreleased]
 
 ### Fixed
+- **A Pi leg no longer discards a finished review because one turn failed and
+  was retried.** Pi retries an errored turn itself (`auto_retry_start`,
+  `auto_retry_end`). The unwrap failed the run on any errored turn, so a single
+  `fetch failed` that Pi recovered two seconds later threw away a complete
+  review (seen: 52 turns, 117 tool calls, final stop reason `stop`), and the
+  longer a review ran the likelier it was to be lost. An errored turn now
+  waits for Pi's word on its retry: `auto_retry_end` with `success: true`
+  clears it and the evidence line says how many turns were retried. A retry
+  that failed, an errored turn with no such word, an aborted or truncated
+  turn, an error message on a turn that stopped normally and an extension
+  error still fail the run.
 - **A Pi leg no longer dies at the token fetch on a host that resolves IPv6
   but cannot route it.** Node gives each address family of a dual-stack host
   a short connect attempt (500 ms on Node 26). When the IPv4 connect to

@@ -224,6 +224,12 @@ def clean(v, n=300):
         v = v.rpartition(" ")[0]
     return v[:n]
 assistants, served, tools, final_text, errors = 0, set(), 0, None, []
+# A turn that ended in error is not yet a failed run: Pi retries it itself (agent_end with
+# willRetry, auto_retry_start, auto_retry_end). Its error waits here until Pi says how the retry
+# went. Only `auto_retry_end` with success true clears it; a failed retry, a stream that ends
+# without one, and every other kind of failure (aborted, truncated, an error message on a turn
+# that stopped normally, an extension error) still fail the run.
+retrying, recovered = [], 0
 served_response = set()
 usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0}
 cost = 0.0
@@ -242,6 +248,10 @@ for line in sys.stdin:
         tools += 1
     elif t == "extension_error":
         errors.append(clean(o.get("error") or o))
+    elif t == "auto_retry_end":
+        if o.get("success") is True:
+            recovered += len(retrying)
+            retrying = []
     elif t == "message_end":
         m = o.get("message") or {}
         if m.get("role") != "assistant":
@@ -273,12 +283,15 @@ for line in sys.stdin:
             final_text = "\n".join(texts)
         if m.get("stopReason") in ("error", "aborted"):
             # The message is the cause; the stop reason alone names none.
-            errors.append(f"stopReason={m.get('stopReason')}: " + (em or "the stream carries no error message"))
+            cause = f"stopReason={m.get('stopReason')}: " + (em or "the stream carries no error message")
+            (retrying if m.get("stopReason") == "error" else errors).append(cause)
         elif m.get("stopReason") in ("length", "max_tokens"):
             errors.append("stopReason=length (output truncated at the token limit; the final JSON cannot be complete)"
                           + (f": {em}" if em else ""))
         elif failed:
             errors.append(em)
+# An errored turn no successful retry followed is the run's failure.
+errors.extend(retrying)
 if not saw_any:
     print("consort: pi produced no JSON event stream — cannot prove which model ran; result discarded", file=sys.stderr)
     sys.exit(2)
@@ -301,9 +314,10 @@ if errors:
     print(f"consort: pi marked the run failed ({errors[-1]}); result discarded", file=sys.stderr)
     sys.exit(2)
 srv = f", served as {sorted(served_response)[0]}" if served_response else ""
+again = f", {recovered} failed turn{'s' if recovered != 1 else ''} retried by pi" if recovered else ""
 print(f"consort: pi {want_p}/{want_m}{srv} — {assistants} turns, {tools} tool calls, {usage['input']} input tokens "
       f"({usage['cacheRead']} cached), {usage['reasoning']} reasoning tokens, {usage['output']} output tokens, "
-      f"${cost:.4f}", file=sys.stderr)
+      f"${cost:.4f}{again}", file=sys.stderr)
 sys.stdout.write(final_text or "")
 EOF
   python3 -c "$script" "${1:?provider}" "${2:?model}"

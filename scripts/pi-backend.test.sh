@@ -75,6 +75,46 @@ printf '%s' "$err" | grep -q 'stopReason=error: the stream carries no error mess
 err="$(msg_end stop '"quota exceeded for the project"' | unwrap_err)"
 printf '%s' "$err" | grep -q 'quota exceeded for the project'; check "an error message on a normally stopped turn still fails the run and is printed" $?
 
+# --- a turn Pi retried and recovered is not a failed run ----------------------
+# Pi retries an errored turn itself and says how it went (auto_retry_end). Before this, one
+# recovered fetch failure discarded a complete 52-turn review.
+retry_end() { printf '{"type":"auto_retry_end","success":%s,"attempt":1}\n' "$1"; }
+unwrap_all() { _consort_pi_unwrap google-vertex m1 2>&1; }
+
+all="$({ msg_end error '"fetch failed"'; retry_end true; msg_end stop '' 'REVIEW'; } | unwrap_all)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$all" | grep -q 'REVIEW$'; check "a turn that failed and that pi retried with success leaves the run's result" $?
+printf '%s' "$all" | grep -q ', 1 failed turn retried by pi'; check "the evidence line counts the retried turn" $?
+
+all="$({ msg_end error '"fetch failed"'; msg_end error '"fetch failed"'; retry_end true; msg_end stop '' 'REVIEW'; } | unwrap_all)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$all" | grep -q ', 2 failed turns retried by pi'; check "two failed attempts before the retry that worked are both counted" $?
+
+err="$({ msg_end error '"fetch failed"'; retry_end false; } | unwrap_err)"; rc=$?
+{ msg_end error '"fetch failed"'; retry_end false; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ] && printf '%s' "$err" | grep -q 'stopReason=error: fetch failed'; check "a retry that failed still fails the run and names the cause" $?
+
+{ msg_end error '"fetch failed"'; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a failed turn with no word from pi that a retry worked still fails the run" $?
+
+{ msg_end error '"a"'; retry_end true; msg_end stop '' 'PART'; msg_end error '"second failure"'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a failure after the recovered one still fails the run" $?
+err="$({ msg_end error '"a"'; retry_end true; msg_end stop '' 'PART'; msg_end error '"second failure"'; } | unwrap_err)"
+printf '%s' "$err" | grep -q 'second failure'; check "and it is the later failure that is named" $?
+
+{ msg_end aborted '"stopped"'; retry_end true; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "an aborted turn is never forgiven by a retry" $?
+
+{ msg_end stop '"quota exceeded for the project"' 'x'; retry_end true; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "an error message on a normally stopped turn is never forgiven by a retry" $?
+
+{ msg_end length '' 'x'; retry_end true; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a truncated turn is never forgiven by a retry" $?
+
+{ printf '{"type":"extension_error","error":"boom"}\n'; retry_end true; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "an extension error is never forgiven by a retry" $?
+
+{ msg_end error '"fetch failed"'; printf '{"type":"auto_retry_end","success":"true","attempt":1}\n'; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "only a real true from pi counts as a retry that worked" $?
+
 # Fresh values, minted here: a documented example key would prove nothing.
 secret="k$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 err="$(msg_end error "\"request to https://h.example/v1/models?key=$secret&alt=sse failed; Authorization: Bearer $secret; https://u:$secret@h.example/\"" | unwrap_err)"

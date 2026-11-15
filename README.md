@@ -407,6 +407,11 @@ are read, with bounded patterns, so a hostile message cannot stall the leg.
 That is a filter of known shapes, not a guarantee: treat a leg's stderr as you treat any
 provider error text, and open `CONSORT_PI_RAW` for the full message.
 
+A turn that failed and that Pi itself retried with success is not a failed
+run: the leg's evidence line then ends with `N failed turn(s) retried by pi`.
+A retry that failed, or an errored turn Pi never reported a successful retry
+for, still discards the result.
+
 The Pi process is started with
 `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=5000`
 (`CONSORT_PI_CONNECT_ATTEMPT_MS`, `0` to leave Node alone; your own
