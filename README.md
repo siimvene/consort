@@ -409,8 +409,9 @@ provider error text, and open `CONSORT_PI_RAW` for the full message.
 
 A turn that failed and that Pi itself retried with success is not a failed
 run: the leg's evidence line then ends with `N failed turn(s) retried by pi`.
-A retry that failed, or an errored turn Pi never reported a successful retry
-for, still discards the result.
+A retry that failed, or an errored turn Pi announced no retry for, still
+discards the result, whatever is retried with success later; and the text of
+a turn that failed is never the result.
 
 The Pi process is started with
 `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=5000`

@@ -225,11 +225,14 @@ def clean(v, n=300):
     return v[:n]
 assistants, served, tools, final_text, errors = 0, set(), 0, None, []
 # A turn that ended in error is not yet a failed run: Pi retries it itself (agent_end with
-# willRetry, auto_retry_start, auto_retry_end). Its error waits here until Pi says how the retry
-# went. Only `auto_retry_end` with success true clears it; a failed retry, a stream that ends
-# without one, and every other kind of failure (aborted, truncated, an error message on a turn
-# that stopped normally, an extension error) still fail the run.
-retrying, recovered = [], 0
+# willRetry, auto_retry_start, auto_retry_end). Its error waits in `unclaimed` until Pi announces
+# a retry (auto_retry_start moves it to `retrying`) and then until Pi says how that retry went:
+# only `auto_retry_end` with success true clears what is in `retrying`. Everything else is the
+# run's failure: a retry that failed, an errored turn Pi never announced a retry for (the run
+# carried on past it, or the stream ended), and every other kind of failure (aborted, truncated,
+# an error message on a turn that stopped normally, an extension error). One successful retry so
+# never clears a failure that was not its own.
+unclaimed, retrying, recovered = [], [], 0
 served_response = set()
 usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0}
 cost = 0.0
@@ -248,10 +251,15 @@ for line in sys.stdin:
         tools += 1
     elif t == "extension_error":
         errors.append(clean(o.get("error") or o))
+    elif t == "auto_retry_start":
+        retrying.extend(unclaimed)
+        unclaimed = []
     elif t == "auto_retry_end":
         if o.get("success") is True:
             recovered += len(retrying)
-            retrying = []
+        else:
+            errors.extend(retrying)
+        retrying = []
     elif t == "message_end":
         m = o.get("message") or {}
         if m.get("role") != "assistant":
@@ -278,19 +286,28 @@ for line in sys.stdin:
             # node-fetch prints an AggregateError (every connect attempt of a host failed)
             # with an empty reason; CONSORT_PI_CONNECT_ATTEMPT_MS is the knob for that.
             em += " (empty: several connect attempts failed, see CONSORT_PI_CONNECT_ATTEMPT_MS)"
+        ended_badly = failed or m.get("stopReason") in ("error", "aborted", "length", "max_tokens")
+        if not ended_badly:
+            # The run carried on past an errored turn Pi announced no retry for: that turn's
+            # failure stands, whatever is retried later.
+            errors.extend(unclaimed)
+            unclaimed = []
         texts = [c.get("text") for c in (m.get("content") or []) if isinstance(c, dict) and c.get("type") == "text" and c.get("text")]
-        if texts:
+        if texts and not ended_badly:
+            # Never the text of a turn that failed: a partial answer is not the result, even
+            # when the retry that follows says nothing.
             final_text = "\n".join(texts)
         if m.get("stopReason") in ("error", "aborted"):
             # The message is the cause; the stop reason alone names none.
             cause = f"stopReason={m.get('stopReason')}: " + (em or "the stream carries no error message")
-            (retrying if m.get("stopReason") == "error" else errors).append(cause)
+            (unclaimed if m.get("stopReason") == "error" else errors).append(cause)
         elif m.get("stopReason") in ("length", "max_tokens"):
             errors.append("stopReason=length (output truncated at the token limit; the final JSON cannot be complete)"
                           + (f": {em}" if em else ""))
         elif failed:
             errors.append(em)
-# An errored turn no successful retry followed is the run's failure.
+# An errored turn no successful retry of its own followed is the run's failure.
+errors.extend(unclaimed)
 errors.extend(retrying)
 if not saw_any:
     print("consort: pi produced no JSON event stream — cannot prove which model ran; result discarded", file=sys.stderr)

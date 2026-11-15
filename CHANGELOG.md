@@ -14,11 +14,13 @@ still in 0.x.
   `fetch failed` that Pi recovered two seconds later threw away a complete
   review (seen: 52 turns, 117 tool calls, final stop reason `stop`), and the
   longer a review ran the likelier it was to be lost. An errored turn now
-  waits for Pi's word on its retry: `auto_retry_end` with `success: true`
-  clears it and the evidence line says how many turns were retried. A retry
-  that failed, an errored turn with no such word, an aborted or truncated
-  turn, an error message on a turn that stopped normally and an extension
-  error still fail the run.
+  waits for Pi to announce a retry (`auto_retry_start`) and for that retry's
+  outcome: `auto_retry_end` with `success: true` clears the turns of that
+  retry only, and the evidence line says how many turns were retried. A retry
+  that failed, an errored turn Pi announced no retry for, an aborted or
+  truncated turn, an error message on a turn that stopped normally and an
+  extension error still fail the run, and a later retry that worked does not
+  clear them. The text of a turn that failed is never taken as the result.
 - **A Pi leg no longer dies at the token fetch on a host that resolves IPv6
   but cannot route it.** Node gives each address family of a dual-stack host
   a short connect attempt (500 ms on Node 26). When the IPv4 connect to
