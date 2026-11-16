@@ -224,6 +224,20 @@ def clean(v, n=300):
         v = v.rpartition(" ")[0]
     return v[:n]
 assistants, served, tools, final_text, errors = 0, set(), 0, None, []
+# A turn that ended in error is not yet a failed run: Pi retries it itself. The order Pi writes
+# is: the errored turn's message_end, agent_end (willRetry), auto_retry_start, the retried turn
+# (errored again and announced again, up to maxAttempts), and auto_retry_end right after the
+# first turn that worked (success true) or after the last attempt (success false).
+#   unclaimed: the errored turn just read, until Pi announces a retry for it;
+#   retrying:  the errored turns of the retry now open;
+#   answered:  a turn of the open retry has ended well (auto_retry_end is due next).
+# Only auto_retry_end with success true clears `retrying`, and only its own turns are in it: an
+# errored turn is final as soon as the next assistant turn is read without a retry announced
+# for it, a retry Pi reports failed is final with whatever it held, and a retry left open while
+# the run goes on is final too. A retry event with no failed turn behind it also fails the run:
+# Pi said something went wrong. Aborted and truncated turns, an error message on a turn that
+# stopped normally and an extension error fail the run whatever is retried.
+unclaimed, retrying, answered, recovered = [], [], False, 0
 served_response = set()
 usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0}
 cost = 0.0
@@ -242,6 +256,24 @@ for line in sys.stdin:
         tools += 1
     elif t == "extension_error":
         errors.append(clean(o.get("error") or o))
+    elif t == "auto_retry_start":
+        if unclaimed:
+            retrying.extend(unclaimed)
+        else:
+            why = clean(o.get("errorMessage") or "")
+            retrying.append("pi announced a retry with no failed turn before it" + (f": {why}" if why else ""))
+        unclaimed, answered = [], False
+    elif t == "auto_retry_end":
+        if o.get("success") is True:
+            recovered += len(retrying)
+        else:
+            if not (retrying or unclaimed):
+                why = clean(o.get("finalError") or o.get("errorMessage") or "")
+                errors.append("pi reported a retry that failed" + (f": {why}" if why else ""))
+            errors.extend(retrying)
+            errors.extend(unclaimed)
+            unclaimed = []
+        retrying, answered = [], False
     elif t == "message_end":
         m = o.get("message") or {}
         if m.get("role") != "assistant":
@@ -268,17 +300,34 @@ for line in sys.stdin:
             # node-fetch prints an AggregateError (every connect attempt of a host failed)
             # with an empty reason; CONSORT_PI_CONNECT_ATTEMPT_MS is the knob for that.
             em += " (empty: several connect attempts failed, see CONSORT_PI_CONNECT_ATTEMPT_MS)"
+        ended_badly = failed or m.get("stopReason") in ("error", "aborted", "length", "max_tokens")
+        # Another assistant turn, and the errored one before it had no retry announced: its
+        # failure stands, whatever is retried later.
+        errors.extend(unclaimed)
+        unclaimed = []
+        if retrying and answered:
+            # The open retry already had its turn that worked and Pi never closed it.
+            errors.extend(retrying)
+            retrying, answered = [], False
+        if retrying and not ended_badly:
+            answered = True
         texts = [c.get("text") for c in (m.get("content") or []) if isinstance(c, dict) and c.get("type") == "text" and c.get("text")]
-        if texts:
+        if texts and not ended_badly:
+            # Never the text of a turn that failed: a partial answer is not the result, even
+            # when the retry that follows says nothing.
             final_text = "\n".join(texts)
         if m.get("stopReason") in ("error", "aborted"):
             # The message is the cause; the stop reason alone names none.
-            errors.append(f"stopReason={m.get('stopReason')}: " + (em or "the stream carries no error message"))
+            cause = f"stopReason={m.get('stopReason')}: " + (em or "the stream carries no error message")
+            (unclaimed if m.get("stopReason") == "error" else errors).append(cause)
         elif m.get("stopReason") in ("length", "max_tokens"):
             errors.append("stopReason=length (output truncated at the token limit; the final JSON cannot be complete)"
                           + (f": {em}" if em else ""))
         elif failed:
             errors.append(em)
+# An errored turn no successful retry of its own followed is the run's failure.
+errors.extend(unclaimed)
+errors.extend(retrying)
 if not saw_any:
     print("consort: pi produced no JSON event stream — cannot prove which model ran; result discarded", file=sys.stderr)
     sys.exit(2)
@@ -301,9 +350,10 @@ if errors:
     print(f"consort: pi marked the run failed ({errors[-1]}); result discarded", file=sys.stderr)
     sys.exit(2)
 srv = f", served as {sorted(served_response)[0]}" if served_response else ""
+again = f", {recovered} failed turn{'s' if recovered != 1 else ''} retried by pi" if recovered else ""
 print(f"consort: pi {want_p}/{want_m}{srv} — {assistants} turns, {tools} tool calls, {usage['input']} input tokens "
       f"({usage['cacheRead']} cached), {usage['reasoning']} reasoning tokens, {usage['output']} output tokens, "
-      f"${cost:.4f}", file=sys.stderr)
+      f"${cost:.4f}{again}", file=sys.stderr)
 sys.stdout.write(final_text or "")
 EOF
   python3 -c "$script" "${1:?provider}" "${2:?model}"
