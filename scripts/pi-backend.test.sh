@@ -128,6 +128,33 @@ printf '%s' "$err" | grep -q 'stopReason=error: first'; check "and it is that fa
 { msg_end error '"fetch failed"'; retry_end true; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
 [ $? -eq 2 ]; check "a retry pi never announced clears nothing" $?
 
+# The order pi really writes: the turn that worked, then the retry's end.
+all="$({ msg_end error '"fetch failed"'; retry_start; msg_end toolUse '' ''; retry_end true; msg_end stop '' 'REVIEW'; } | unwrap_all)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$all" | grep -q ', 1 failed turn retried by pi'; check "a retry closed after its first turn that worked leaves the run's result" $?
+all="$({ msg_end error '"a"'; retry_start; msg_end error '"b"'; retry_start; msg_end toolUse '' ''; retry_end true; msg_end stop '' 'REVIEW'; } | unwrap_all)"; rc=$?
+[ $rc -eq 0 ] && printf '%s' "$all" | grep -q ', 2 failed turns retried by pi'; check "a second attempt that worked clears both failed attempts of its retry" $?
+
+# A retry claims only its own failed turn (review panel, both legs).
+{ msg_end error '"never retried"'; msg_end error '"later"'; retry_start; retry_end true; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a failed turn right before another failed turn is not swept into that turn's retry" $?
+err="$({ msg_end error '"never retried"'; msg_end error '"later"'; retry_start; retry_end true; msg_end stop '' 'REVIEW'; } | unwrap_err)"
+printf '%s' "$err" | grep -q 'stopReason=error: never retried'; check "and it is the unretried failure that is named" $?
+
+{ msg_end error '"a"'; retry_start; msg_end error '"last attempt"'; retry_end false; msg_end stop '' 'ON'; msg_end error '"c"'; retry_start; retry_end true; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "the last attempt of a retry that failed is not left for a later retry to clear" $?
+
+{ msg_end stop '' 'GOOD'; retry_start; retry_end false; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a retry pi reports failed fails the run even with no failed turn read before it" $?
+{ msg_end stop '' 'GOOD'; retry_end false; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a failed retry's end alone fails the run" $?
+{ msg_end stop '' 'GOOD'; retry_start; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a retry announced and never ended fails the run" $?
+
+{ msg_end error '"first"'; retry_start; msg_end stop '' 'ON'; msg_end error '"later"'; retry_start; retry_end true; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a retry left open while the run went on is not closed by a later retry's end" $?
+{ msg_end error '"first"'; retry_start; msg_end toolUse '' ''; msg_end stop '' 'REVIEW'; } | _consort_pi_unwrap google-vertex m1 >/dev/null 2>&1
+[ $? -eq 2 ]; check "a retry pi never closed fails the run though later turns worked" $?
+
 # A failed turn's partial text is never the result (security pass, LOW).
 out="$({ msg_end error '"fetch failed"' '{\"findings\":[]}'; retry_start; retry_end true; msg_end stop '' ''; } | _consort_pi_unwrap google-vertex m1 2>/dev/null)"
 [ -z "$out" ]; check "the text of a turn that failed is not passed on when the retried turns say nothing" $?

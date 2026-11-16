@@ -224,15 +224,20 @@ def clean(v, n=300):
         v = v.rpartition(" ")[0]
     return v[:n]
 assistants, served, tools, final_text, errors = 0, set(), 0, None, []
-# A turn that ended in error is not yet a failed run: Pi retries it itself (agent_end with
-# willRetry, auto_retry_start, auto_retry_end). Its error waits in `unclaimed` until Pi announces
-# a retry (auto_retry_start moves it to `retrying`) and then until Pi says how that retry went:
-# only `auto_retry_end` with success true clears what is in `retrying`. Everything else is the
-# run's failure: a retry that failed, an errored turn Pi never announced a retry for (the run
-# carried on past it, or the stream ended), and every other kind of failure (aborted, truncated,
-# an error message on a turn that stopped normally, an extension error). One successful retry so
-# never clears a failure that was not its own.
-unclaimed, retrying, recovered = [], [], 0
+# A turn that ended in error is not yet a failed run: Pi retries it itself. The order Pi writes
+# is: the errored turn's message_end, agent_end (willRetry), auto_retry_start, the retried turn
+# (errored again and announced again, up to maxAttempts), and auto_retry_end right after the
+# first turn that worked (success true) or after the last attempt (success false).
+#   unclaimed: the errored turn just read, until Pi announces a retry for it;
+#   retrying:  the errored turns of the retry now open;
+#   answered:  a turn of the open retry has ended well (auto_retry_end is due next).
+# Only auto_retry_end with success true clears `retrying`, and only its own turns are in it: an
+# errored turn is final as soon as the next assistant turn is read without a retry announced
+# for it, a retry Pi reports failed is final with whatever it held, and a retry left open while
+# the run goes on is final too. A retry event with no failed turn behind it also fails the run:
+# Pi said something went wrong. Aborted and truncated turns, an error message on a turn that
+# stopped normally and an extension error fail the run whatever is retried.
+unclaimed, retrying, answered, recovered = [], [], False, 0
 served_response = set()
 usage = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "reasoning": 0}
 cost = 0.0
@@ -252,14 +257,23 @@ for line in sys.stdin:
     elif t == "extension_error":
         errors.append(clean(o.get("error") or o))
     elif t == "auto_retry_start":
-        retrying.extend(unclaimed)
-        unclaimed = []
+        if unclaimed:
+            retrying.extend(unclaimed)
+        else:
+            why = clean(o.get("errorMessage") or "")
+            retrying.append("pi announced a retry with no failed turn before it" + (f": {why}" if why else ""))
+        unclaimed, answered = [], False
     elif t == "auto_retry_end":
         if o.get("success") is True:
             recovered += len(retrying)
         else:
+            if not (retrying or unclaimed):
+                why = clean(o.get("finalError") or o.get("errorMessage") or "")
+                errors.append("pi reported a retry that failed" + (f": {why}" if why else ""))
             errors.extend(retrying)
-        retrying = []
+            errors.extend(unclaimed)
+            unclaimed = []
+        retrying, answered = [], False
     elif t == "message_end":
         m = o.get("message") or {}
         if m.get("role") != "assistant":
@@ -287,11 +301,16 @@ for line in sys.stdin:
             # with an empty reason; CONSORT_PI_CONNECT_ATTEMPT_MS is the knob for that.
             em += " (empty: several connect attempts failed, see CONSORT_PI_CONNECT_ATTEMPT_MS)"
         ended_badly = failed or m.get("stopReason") in ("error", "aborted", "length", "max_tokens")
-        if not ended_badly:
-            # The run carried on past an errored turn Pi announced no retry for: that turn's
-            # failure stands, whatever is retried later.
-            errors.extend(unclaimed)
-            unclaimed = []
+        # Another assistant turn, and the errored one before it had no retry announced: its
+        # failure stands, whatever is retried later.
+        errors.extend(unclaimed)
+        unclaimed = []
+        if retrying and answered:
+            # The open retry already had its turn that worked and Pi never closed it.
+            errors.extend(retrying)
+            retrying, answered = [], False
+        if retrying and not ended_badly:
+            answered = True
         texts = [c.get("text") for c in (m.get("content") or []) if isinstance(c, dict) and c.get("type") == "text" and c.get("text")]
         if texts and not ended_badly:
             # Never the text of a turn that failed: a partial answer is not the result, even
