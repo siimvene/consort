@@ -7,6 +7,8 @@ still in 0.x.
 
 ## [Unreleased]
 
+## [0.13.2] — 2026-11-24
+
 ### Fixed
 - **A Pi leg no longer discards a finished review because one turn failed and
   was retried.** Pi retries an errored turn itself (`auto_retry_start`,
